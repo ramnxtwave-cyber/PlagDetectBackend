@@ -8,14 +8,12 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Initialize default OpenAI client (uses server's API key)
-const defaultOpenai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 // Embedding model configuration
 export const EMBEDDING_MODEL = 'text-embedding-3-small'; // 1536 dimensions
 export const EMBEDDING_DIMENSIONS = 1536;
+
+// Cache for default OpenAI client (lazy initialization)
+let defaultOpenai = null;
 
 /**
  * Get OpenAI client with custom or default API key
@@ -26,6 +24,20 @@ function getOpenAIClient(customApiKey) {
   if (customApiKey) {
     return new OpenAI({ apiKey: customApiKey });
   }
+  
+  // Lazy initialization of default client
+  if (!defaultOpenai) {
+    const serverApiKey = process.env.OPENAI_API_KEY;
+    if (!serverApiKey) {
+      throw new Error(
+        'OpenAI API key is required. Either:\n' +
+        '1. Set OPENAI_API_KEY in your .env file, OR\n' +
+        '2. Provide a custom API key via the x-openai-api-key header in your request'
+      );
+    }
+    defaultOpenai = new OpenAI({ apiKey: serverApiKey });
+  }
+  
   return defaultOpenai;
 }
 

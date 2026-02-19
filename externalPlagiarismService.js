@@ -83,7 +83,7 @@ export async function checkExternalPlagiarism(checkData) {
 
 /**
  * Format external API results for consistent response structure
- * NEW FORMAT: Handles dual detection methods (copy_detect + tree_sitter_python)
+ * NEW FORMAT: Handles dual detection methods (copy_detect + AST detection for any language)
  * @param {Object} externalResult - Raw external API result
  * @returns {Object} Formatted result
  */
@@ -93,14 +93,14 @@ export function formatExternalResult(externalResult) {
       available: false,
       error: externalResult?.error || 'External API unavailable',
       copyDetect: null,
-      treeSitterPython: null,
+      astDetect: null,
       matches: []
     };
   }
   
   const data = externalResult.data;
   
-  // Format copy_detect results
+  // Format copy_detect results (works for all languages)
   const copyDetect = data.copy_detect ? {
     matchesFound: data.copy_detect.matches_found || false,
     thresholdUsed: data.copy_detect.threshold_used || 0.85,
@@ -113,35 +113,49 @@ export function formatExternalResult(externalResult) {
     }))
   } : null;
   
-  // Format tree_sitter_python results
-  const treeSitterPython = data.tree_sitter_python ? {
-    matchesFound: data.tree_sitter_python.matches_found || false,
-    thresholdUsed: data.tree_sitter_python.threshold_used || 0.85,
-    matches: (data.tree_sitter_python.matches || []).map(match => ({
-      matchedStudentId: match.matched_student_id,
-      matchedSubmissionId: match.matched_submission_id,
-      similarityScore: match.similarity_score,
-      matchedCode: match.matched_code || '',
-      detectionMethod: 'tree_sitter_python'
-    }))
-  } : null;
+  // Format AST detection results (language-agnostic)
+  // Supports: tree_sitter_python, tree_sitter_javascript, tree_sitter_java, etc.
+  let astDetect = null;
+  let astDetectionKey = null;
+  
+  // Find any tree_sitter_* key in the response
+  for (const key in data) {
+    if (key.startsWith('tree_sitter_')) {
+      astDetectionKey = key;
+      astDetect = {
+        language: key.replace('tree_sitter_', ''),
+        matchesFound: data[key].matches_found || false,
+        thresholdUsed: data[key].threshold_used || 0.85,
+        matches: (data[key].matches || []).map(match => ({
+          matchedStudentId: match.matched_student_id,
+          matchedSubmissionId: match.matched_submission_id,
+          similarityScore: match.similarity_score,
+          matchedCode: match.matched_code || '',
+          detectionMethod: key
+        }))
+      };
+      break; // Use the first tree_sitter_* key found
+    }
+  }
   
   // Combine all matches from both methods
   const allMatches = [
     ...(copyDetect?.matches || []),
-    ...(treeSitterPython?.matches || [])
+    ...(astDetect?.matches || [])
   ];
   
   // Determine if any detection method found matches
   const anyMatchesFound = 
     (copyDetect?.matchesFound || false) || 
-    (treeSitterPython?.matchesFound || false);
+    (astDetect?.matchesFound || false);
   
   return {
     available: true,
     matchesFound: anyMatchesFound,
     copyDetect: copyDetect,
-    treeSitterPython: treeSitterPython,
+    astDetect: astDetect,
+    // Keep backward compatibility
+    treeSitterPython: astDetectionKey === 'tree_sitter_python' ? astDetect : null,
     matches: allMatches,
     rawResponse: data
   };
