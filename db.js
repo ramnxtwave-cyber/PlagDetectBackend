@@ -12,22 +12,61 @@ dotenv.config();
 const { Pool } = pg;
 
 // Create PostgreSQL connection pool
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'plagiarism_db',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
+// Support both DATABASE_URL (Railway, Heroku) and individual env vars (local)
+let poolConfig;
 
-// Register pgvector types with the pool
-// Note: We register on the pool's type parser, not on individual clients
+if (process.env.DATABASE_URL) {
+  // Railway/Heroku style - use connection string
+  console.log('[DB] Using DATABASE_URL connection string');
+  poolConfig = {
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DB_SSL !== 'false' ? {
+      rejectUnauthorized: false // Required for Railway/Heroku
+    } : false,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+  };
+} else {
+  // Local development - use individual env vars
+  console.log('[DB] Using individual environment variables');
+  poolConfig = {
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 5432,
+    database: process.env.DB_NAME || 'plagiarism_db',
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || 'postgres',
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+  };
+}
+
+const pool = new Pool(poolConfig);
+
+// Test database connection
 pool.on('connect', async (client) => {
   await pgvector.registerType(client);
+  console.log('[DB] New database connection established');
 });
+
+pool.on('error', (err) => {
+  console.error('[DB] Unexpected error on idle client', err);
+});
+
+// Verify connection on startup
+(async () => {
+  try {
+    const client = await pool.connect();
+    console.log('[DB] ✅ Database connection successful');
+    const result = await client.query('SELECT NOW()');
+    console.log('[DB] Server time:', result.rows[0].now);
+    client.release();
+  } catch (err) {
+    console.error('[DB] ❌ Database connection failed:', err.message);
+    console.error('[DB] Please check your DATABASE_URL or database configuration');
+  }
+})();
 
 /**
  * Execute a query with error handling
