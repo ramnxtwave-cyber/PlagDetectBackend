@@ -57,13 +57,41 @@ pool.on('error', (err) => {
 // Verify connection on startup
 (async () => {
   try {
+    console.log('[DB] 🔄 Testing database connection...');
+    console.log('[DB] DATABASE_URL exists:', !!process.env.DATABASE_URL);
+    if (!process.env.DATABASE_URL) {
+      console.log('[DB] Fallback config:', {
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 5432,
+        database: process.env.DB_NAME || 'plagiarism_db',
+        user: process.env.DB_USER || 'postgres'
+      });
+    }
+    
     const client = await pool.connect();
     console.log('[DB] ✅ Database connection successful');
     const result = await client.query('SELECT NOW()');
     console.log('[DB] Server time:', result.rows[0].now);
+    
+    // Check if pgvector extension is installed
+    const vectorCheck = await client.query(
+      "SELECT * FROM pg_extension WHERE extname = 'vector'"
+    );
+    if (vectorCheck.rows.length > 0) {
+      console.log('[DB] ✅ pgvector extension is installed');
+    } else {
+      console.warn('[DB] ⚠️  pgvector extension NOT found - you may need to run: CREATE EXTENSION vector;');
+    }
+    
     client.release();
   } catch (err) {
     console.error('[DB] ❌ Database connection failed:', err.message);
+    console.error('[DB] Error code:', err.code);
+    if (err.code === 'ECONNREFUSED') {
+      console.error('[DB] ⚠️  CONNECTION REFUSED - Database server is not accessible');
+      console.error('[DB] 💡 On Railway: Make sure you have added a PostgreSQL database to your project');
+      console.error('[DB] 💡 Check that DATABASE_URL environment variable is set in Railway dashboard');
+    }
     console.error('[DB] Please check your DATABASE_URL or database configuration');
   }
 })();
