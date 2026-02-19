@@ -15,11 +15,22 @@ const { Pool } = pg;
 // Support both DATABASE_URL (Railway, Heroku) and individual env vars (local)
 let poolConfig;
 
-if (process.env.DATABASE_URL) {
+// Railway provides both private (internal) and public URLs
+// Prefer DATABASE_PUBLIC_URL for better reliability, fallback to DATABASE_URL
+const databaseUrl = process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL;
+
+if (databaseUrl) {
   // Railway/Heroku style - use connection string
-  console.log('[DB] Using DATABASE_URL connection string');
+  const urlType = process.env.DATABASE_PUBLIC_URL ? 'DATABASE_PUBLIC_URL' : 'DATABASE_URL';
+  console.log(`[DB] Using ${urlType} connection string`);
+  
+  // Check if using internal hostname (Railway private network)
+  if (databaseUrl.includes('railway.internal')) {
+    console.log('[DB] ⚠️  Using Railway internal hostname - only works within Railway network');
+  }
+  
   poolConfig = {
-    connectionString: process.env.DATABASE_URL,
+    connectionString: databaseUrl,
     ssl: process.env.DB_SSL !== 'false' ? {
       rejectUnauthorized: false // Required for Railway/Heroku
     } : false,
@@ -58,8 +69,11 @@ pool.on('error', (err) => {
 (async () => {
   try {
     console.log('[DB] 🔄 Testing database connection...');
-    console.log('[DB] DATABASE_URL exists:', !!process.env.DATABASE_URL);
-    if (!process.env.DATABASE_URL) {
+    console.log('[DB] Environment check:');
+    console.log('[DB]   DATABASE_PUBLIC_URL:', process.env.DATABASE_PUBLIC_URL ? 'SET ✓' : 'NOT SET');
+    console.log('[DB]   DATABASE_URL:', process.env.DATABASE_URL ? 'SET ✓' : 'NOT SET');
+    
+    if (!process.env.DATABASE_PUBLIC_URL && !process.env.DATABASE_URL) {
       console.log('[DB] Fallback config:', {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 5432,
@@ -87,11 +101,23 @@ pool.on('error', (err) => {
   } catch (err) {
     console.error('[DB] ❌ Database connection failed:', err.message);
     console.error('[DB] Error code:', err.code);
+    
     if (err.code === 'ECONNREFUSED') {
       console.error('[DB] ⚠️  CONNECTION REFUSED - Database server is not accessible');
       console.error('[DB] 💡 On Railway: Make sure you have added a PostgreSQL database to your project');
       console.error('[DB] 💡 Check that DATABASE_URL environment variable is set in Railway dashboard');
+    } else if (err.code === 'ENOTFOUND') {
+      console.error('[DB] ⚠️  HOSTNAME NOT FOUND - Cannot resolve database hostname');
+      if (err.message.includes('railway.internal')) {
+        console.error('[DB] 💡 SOLUTION: Use DATABASE_PUBLIC_URL instead of DATABASE_URL in Railway');
+        console.error('[DB] 💡 In Railway dashboard:');
+        console.error('[DB]    1. Go to your PostgreSQL database → Variables/Connect tab');
+        console.error('[DB]    2. Copy the DATABASE_PUBLIC_URL (should contain .railway.app)');
+        console.error('[DB]    3. Go to your backend service → Variables tab');
+        console.error('[DB]    4. Update DATABASE_URL to use DATABASE_PUBLIC_URL');
+      }
     }
+    
     console.error('[DB] Please check your DATABASE_URL or database configuration');
   }
 })();
