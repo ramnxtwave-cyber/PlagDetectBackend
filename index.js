@@ -18,8 +18,13 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
+// Middleware - Configure CORS for production
+app.use(cors({
+  origin: '*', // Allow all origins (adjust in production)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-OpenAI-API-Key'],
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' })); // Support large code submissions
 
 // Health check endpoint
@@ -110,6 +115,24 @@ app.post('/api/submit', async (req, res) => {
     
   } catch (error) {
     console.error('[Submit Error]', error);
+    
+    // Check if it's an OpenAI API quota/key error
+    if (error.message && error.message.includes('quota')) {
+      return res.status(402).json({
+        success: false,
+        error: 'OpenAI API quota exceeded. Please provide a valid API key with available credits using the "OpenAI API Key" field in the frontend.',
+        errorType: 'QUOTA_EXCEEDED'
+      });
+    }
+    
+    if (error.message && error.message.includes('API key')) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or missing OpenAI API key. Please provide a valid API key using the "OpenAI API Key" field in the frontend.',
+        errorType: 'INVALID_API_KEY'
+      });
+    }
+    
     res.status(500).json({
       success: false,
       error: error.message || 'Internal server error',
@@ -352,6 +375,24 @@ app.post('/api/check', async (req, res) => {
     
   } catch (error) {
     console.error('[Check Error]', error);
+    
+    // Check if it's an OpenAI API quota/key error
+    if (error.message && error.message.includes('quota')) {
+      return res.status(402).json({
+        success: false,
+        error: 'OpenAI API quota exceeded. Please provide a valid API key with available credits using the "OpenAI API Key" field in the frontend.',
+        errorType: 'QUOTA_EXCEEDED'
+      });
+    }
+    
+    if (error.message && error.message.includes('API key')) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or missing OpenAI API key. Please provide a valid API key using the "OpenAI API Key" field in the frontend.',
+        errorType: 'INVALID_API_KEY'
+      });
+    }
+    
     res.status(500).json({
       success: false,
       error: error.message || 'Internal server error',
