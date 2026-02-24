@@ -125,6 +125,15 @@ app.post('/api/submit', async (req, res) => {
   } catch (error) {
     console.error('[Submit Error]', error);
     
+    // Check if it's a Pinecone error
+    if (error.message && error.message.includes('Pinecone')) {
+      return res.status(503).json({
+        success: false,
+        error: 'Vector database not configured. Please set PINECONE_API_KEY in your backend .env file. Get free API key from https://www.pinecone.io/',
+        errorType: 'PINECONE_NOT_CONFIGURED'
+      });
+    }
+    
     // Check if it's an OpenAI API quota/key error
     if (error.message && error.message.includes('quota')) {
       return res.status(402).json({
@@ -382,6 +391,15 @@ app.post('/api/check', async (req, res) => {
   } catch (error) {
     console.error('[Check Error]', error);
     
+    // Check if it's a Pinecone error
+    if (error.message && error.message.includes('Pinecone')) {
+      return res.status(503).json({
+        success: false,
+        error: 'Vector database not configured. Please set PINECONE_API_KEY in your backend .env file. Get free API key from https://www.pinecone.io/',
+        errorType: 'PINECONE_NOT_CONFIGURED'
+      });
+    }
+    
     // Check if it's an OpenAI API quota/key error
     if (error.message && error.message.includes('quota')) {
       return res.status(402).json({
@@ -476,15 +494,22 @@ app.use((err, req, res, next) => {
 // Initialize and start server
 async function startServer() {
   try {
-    // Initialize Pinecone
-    await vectorDb.initializeIndex();
+    // Try to initialize Pinecone (non-fatal if it fails)
+    const pineconeInitialized = await vectorDb.initializeIndex();
     
     // Start Express server
     app.listen(PORT, () => {
       console.log(`\n🚀 Semantic Plagiarism Detection Server running on http://localhost:${PORT}`);
       console.log(`📊 Embedding Model: ${embeddings.EMBEDDING_MODEL}`);
       console.log(`📐 Vector Dimensions: ${embeddings.EMBEDDING_DIMENSIONS}`);
-      console.log(`🎯 Vector Database: Pinecone (Cloud)`);
+      console.log(`🎯 Vector Database: Pinecone (Cloud) ${pineconeInitialized ? '✓' : '✗ NOT CONFIGURED'}`);
+      
+      if (!pineconeInitialized) {
+        console.log(`\n⚠️  WARNING: Pinecone is not configured!`);
+        console.log(`   Set PINECONE_API_KEY in .env to enable vector storage.`);
+        console.log(`   Get free API key: https://www.pinecone.io/`);
+      }
+      
       console.log(`\nAPI Endpoints:`);
       console.log(`  POST /api/submit  - Submit code for analysis`);
       console.log(`  POST /api/check   - Check code for similarity`);
