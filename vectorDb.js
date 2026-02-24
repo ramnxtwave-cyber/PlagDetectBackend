@@ -18,7 +18,7 @@ let index = null;
  */
 function getPineconeClient() {
   if (!pinecone) {
-    const apiKey = process.env.PINECONE_API_KEY;
+    const apiKey = process.env.PINECONE_API_KEY ?? 'pcsk_69ch9a_RPQLUArtXyReUKk87f7grMHiBzmz2EBWoqhENNJFufkbCPJ4DWJ9hrfq1DzcDXN';
     
     if (!apiKey || apiKey === 'your_pinecone_api_key_here') {
       throw new Error(
