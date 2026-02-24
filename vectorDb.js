@@ -9,25 +9,44 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Initialize Pinecone client
-const pinecone = new Pinecone({
-  apiKey: process.env.PINECONE_API_KEY,
-});
-
 const INDEX_NAME = process.env.PINECONE_INDEX_NAME || 'plagiarism-detector';
+let pinecone = null;
 let index = null;
+
+/**
+ * Get or create Pinecone client (lazy initialization)
+ */
+function getPineconeClient() {
+  if (!pinecone) {
+    const apiKey = process.env.PINECONE_API_KEY;
+    
+    if (!apiKey || apiKey === 'your_pinecone_api_key_here') {
+      throw new Error(
+        'Pinecone API key is not configured. Please set PINECONE_API_KEY in your .env file. ' +
+        'Get your free API key from https://www.pinecone.io/'
+      );
+    }
+    
+    pinecone = new Pinecone({ apiKey });
+    console.log('[Pinecone] Client initialized');
+  }
+  
+  return pinecone;
+}
 
 /**
  * Initialize Pinecone index
  */
 export async function initializeIndex() {
   try {
-    index = pinecone.index(INDEX_NAME);
+    const client = getPineconeClient();
+    index = client.index(INDEX_NAME);
     console.log(`[Pinecone] Connected to index: ${INDEX_NAME}`);
     return true;
   } catch (error) {
     console.error('[Pinecone Init Error]', error.message);
-    throw new Error(`Failed to initialize Pinecone: ${error.message}`);
+    console.warn('[Pinecone] Server will start but vector operations will fail until API key is configured');
+    return false;
   }
 }
 
@@ -39,6 +58,10 @@ export async function saveSubmission(data) {
   const { submissionId, studentId, questionId, code, embedding, chunks } = data;
   
   try {
+    if (!index) {
+      throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
+    }
+    
     const vectors = [];
     
     // Store whole-submission vector
@@ -95,6 +118,10 @@ export async function saveSubmission(data) {
  */
 export async function findSimilarSubmissions(embedding, questionId, limit = 5, minSimilarity = 0.7) {
   try {
+    if (!index) {
+      throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
+    }
+    
     const queryResponse = await index.query({
       vector: embedding,
       topK: 50,
@@ -133,6 +160,10 @@ export async function findSimilarSubmissions(embedding, questionId, limit = 5, m
  */
 export async function findSimilarChunks(embedding, questionId, limit = 10, minSimilarity = 0.75) {
   try {
+    if (!index) {
+      throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
+    }
+    
     const queryResponse = await index.query({
       vector: embedding,
       topK: 100,
@@ -168,6 +199,10 @@ export async function findSimilarChunks(embedding, questionId, limit = 10, minSi
  */
 export async function getSubmissionsByQuestion(questionId) {
   try {
+    if (!index) {
+      throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
+    }
+    
     const queryResponse = await index.query({
       vector: Array(1536).fill(0),
       topK: 10000,
@@ -196,6 +231,10 @@ export async function getSubmissionsByQuestion(questionId) {
  */
 export async function getSubmission(submissionId) {
   try {
+    if (!index) {
+      throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
+    }
+    
     const fetchResponse = await index.fetch([`sub_${submissionId}`]);
     
     if (!fetchResponse.records || Object.keys(fetchResponse.records).length === 0) {
