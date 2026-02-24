@@ -8,7 +8,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 
 // Import modules
-import * as db from './db.js';
+import * as vectorDb from './vectorDb.js';
 import * as embeddings from './embeddings.js';
 import * as chunking from './chunking.js';
 import * as externalPlagiarism from './externalPlagiarismService.js';
@@ -84,24 +84,33 @@ app.post('/api/submit', async (req, res) => {
       console.log(`[Submit] Using custom API key`);
     }
     
-    // Step 1: Save submission to database
-    const submissionId = await db.saveSubmission(studentId, questionId, code);
-    console.log(`[Submit] Saved submission with ID: ${submissionId}`);
+    // Generate submission ID
+    const submissionId = `${studentId}_${questionId}_${Date.now()}`;
+    console.log(`[Submit] Generated submission ID: ${submissionId}`);
     
-    // Step 2: Generate whole-code embedding (with custom API key if provided)
+    // Step 1: Generate whole-code embedding
     const wholeCodeEmbedding = await embeddings.generateCodeEmbedding(code, language, customApiKey);
-    await db.saveSubmissionVector(submissionId, wholeCodeEmbedding);
-    console.log(`[Submit] Saved whole-code embedding`);
+    console.log(`[Submit] Generated whole-code embedding`);
     
-    // Step 3: Extract and embed chunks
+    // Step 2: Extract and embed chunks
     const codeChunks = chunking.extractCodeChunks(code, language);
     console.log(`[Submit] Extracted ${codeChunks.length} chunks`);
     
-    if (codeChunks.length > 0) {
-      const chunksWithEmbeddings = await embeddings.generateChunkEmbeddings(codeChunks, language, customApiKey);
-      await db.saveSubmissionChunks(submissionId, chunksWithEmbeddings);
-      console.log(`[Submit] Saved ${chunksWithEmbeddings.length} chunk embeddings`);
-    }
+    const chunksWithEmbeddings = codeChunks.length > 0 
+      ? await embeddings.generateChunkEmbeddings(codeChunks, language, customApiKey)
+      : [];
+    
+    // Step 3: Save everything to Pinecone
+    await vectorDb.saveSubmission({
+      submissionId,
+      studentId,
+      questionId,
+      code,
+      embedding: wholeCodeEmbedding,
+      chunks: chunksWithEmbeddings
+    });
+    console.log(`[Submit] Saved to vector database with ${chunksWithEmbeddings.length} chunks`);
+
     
     const chunkStats = chunking.getChunkStats(codeChunks);
     
@@ -199,7 +208,7 @@ app.post('/api/check', async (req, res) => {
     console.log(`[Check] Generated embedding for submission`);
     
     // Step 2: Find similar whole submissions
-    const similarSubmissions = await db.findSimilarSubmissions(
+    const similarSubmissions = await vectorDb.findSimilarSubmissions(
       codeEmbedding,
       questionId,
       maxResults,
@@ -213,15 +222,13 @@ app.post('/api/check', async (req, res) => {
     
     let similarChunks = [];
     if (codeChunks.length > 0) {
-      // Generate embeddings for chunks (with custom API key if provided)
       const queryChunksWithEmbeddings = await embeddings.generateChunkEmbeddings(codeChunks, language, customApiKey);
       
-      // Find similar chunks for each query chunk
       const chunkSimilarityPromises = queryChunksWithEmbeddings.map(async (chunk) => {
-        const matches = await db.findSimilarChunks(
+        const matches = await vectorDb.findSimilarChunks(
           chunk.embedding,
           questionId,
-          5, // Top 5 per chunk
+          5,
           similarityThreshold
         );
         
@@ -235,7 +242,6 @@ app.post('/api/check', async (req, res) => {
       const chunkResults = await Promise.all(chunkSimilarityPromises);
       similarChunks = chunkResults.flat();
       
-      // Sort by similarity and deduplicate
       similarChunks.sort((a, b) => b.similarity - a.similarity);
       console.log(`[Check] Found ${similarChunks.length} similar chunks`);
     }
@@ -407,7 +413,7 @@ app.post('/api/check', async (req, res) => {
 app.get('/api/submissions/:questionId', async (req, res) => {
   try {
     const { questionId } = req.params;
-    const submissions = await db.getSubmissionsByQuestion(questionId);
+    const submissions = await vectorDb.getSubmissionsByQuestion(questionId);
     
     res.json({
       success: true,
@@ -436,7 +442,7 @@ app.get('/api/submissions/:questionId', async (req, res) => {
 app.get('/api/submission/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const submission = await db.getSubmission(parseInt(id));
+    const submission = await vectorDb.getSubmission(id);
     
     if (!submission) {
       return res.status(404).json({
@@ -467,28 +473,41 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`\n🚀 Semantic Plagiarism Detection Server running on http://localhost:${PORT}`);
-  console.log(`📊 Embedding Model: ${embeddings.EMBEDDING_MODEL}`);
-  console.log(`📐 Vector Dimensions: ${embeddings.EMBEDDING_DIMENSIONS}`);
-  console.log(`\nAPI Endpoints:`);
-  console.log(`  POST /api/submit  - Submit code for analysis`);
-  console.log(`  POST /api/check   - Check code for similarity`);
-  console.log(`  GET  /api/health  - Health check`);
-  console.log(`\n`);
-});
+// Initialize and start server
+async function startServer() {
+  try {
+    // Initialize Pinecone
+    await vectorDb.initializeIndex();
+    
+    // Start Express server
+    app.listen(PORT, () => {
+      console.log(`\n🚀 Semantic Plagiarism Detection Server running on http://localhost:${PORT}`);
+      console.log(`📊 Embedding Model: ${embeddings.EMBEDDING_MODEL}`);
+      console.log(`📐 Vector Dimensions: ${embeddings.EMBEDDING_DIMENSIONS}`);
+      console.log(`🎯 Vector Database: Pinecone (Cloud)`);
+      console.log(`\nAPI Endpoints:`);
+      console.log(`  POST /api/submit  - Submit code for analysis`);
+      console.log(`  POST /api/check   - Check code for similarity`);
+      console.log(`  GET  /api/health  - Health check`);
+      console.log(`\n`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+// Start the server
+startServer();
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, closing database connection...');
-  await db.closePool();
+  console.log('SIGTERM received, shutting down...');
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
-  console.log('\nSIGINT received, closing database connection...');
-  await db.closePool();
+  console.log('\nSIGINT received, shutting down...');
   process.exit(0);
 });
 
