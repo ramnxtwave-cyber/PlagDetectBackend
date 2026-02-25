@@ -295,72 +295,76 @@ app.post('/api/check', async (req, res) => {
       matchedChunkIndex: chunk.chunk_index,
     });
     
-    // Step 5: Call external plagiarism API (if similar submissions found)
+    // Step 5: Call external plagiarism API (always, regardless of local matches)
     let externalResult = null;
     let finalDecision = null;
     
-    if (similarSubmissions.length > 0) {
-      console.log(`[Check] Calling external plagiarism API...`);
-      
-      try {
-        // Prepare data for external API
-        const externalCheckData = {
-          questionId: questionId,
-          currentSubmission: {
-            studentId: 'current_check', // Placeholder since this is a check, not a saved submission
-            submissionId: 'temp_' + Date.now(),
-            code: code
-          },
-          pastSubmissions: similarSubmissions.slice(0, 5).map(sub => ({
+    console.log(`[Check] Calling external plagiarism API...`);
+    console.log(`[Check] Local matches found: ${similarSubmissions.length}`);
+    
+    try {
+      // Prepare submissions for external API
+      // Include top 5 local matches, or check against empty array if no local matches
+      const pastSubmissions = similarSubmissions.length > 0
+        ? similarSubmissions.slice(0, 5).map(sub => ({
             studentId: sub.student_id,
-            submissionId: sub.id.toString(),
             code: sub.code
           }))
-        };
-        
-        // Call external API (non-blocking - won't fail if API is down)
-        const externalApiResult = await externalPlagiarism.checkExternalPlagiarism(externalCheckData);
-        externalResult = externalPlagiarism.formatExternalResult(externalApiResult);
-        
-        // Determine final decision based on both local and external results
-        const localResultForDecision = {
-          similarSubmissions: similarSubmissions,
-          summary: summary
-        };
-        
-        finalDecision = externalPlagiarism.determineFinalDecision(
-          localResultForDecision,
-          externalResult,
-          0.85 // High confidence threshold
-        );
-        
-        console.log(`[Check] Final decision: ${finalDecision.decision} (confidence: ${finalDecision.confidence})`);
-        
-      } catch (error) {
-        console.error('[Check] External API call failed:', error.message);
-        externalResult = {
-          available: false,
-          error: error.message,
-          matches: []
-        };
-      }
-    } else {
-      console.log(`[Check] No local matches found, skipping external API call`);
+        : []; // Empty array - external API can still check for patterns/online sources
+      
+      // Call external API with language parameter
+      const externalApiResponse = await externalPlagiarism.checkExternalPlagiarism(
+        questionId,
+        {
+          studentId: 'current_check',
+          code: code
+        },
+        pastSubmissions,
+        language
+      );
+      
+      externalResult = externalPlagiarism.formatExternalResult(externalApiResponse);
+      
+      // Determine final decision based on both local and external results
+      const hasLocalMatch = similarSubmissions.length > 0;
+      finalDecision = externalPlagiarism.determineFinalDecision(
+        hasLocalMatch,
+        externalResult,
+        similarityThreshold
+      );
+      
+      console.log(`[Check] Final decision: Plagiarism=${finalDecision.plagiarismDetected}, Confidence=${finalDecision.confidence}`);
+      
+    } catch (error) {
+      console.error('[Check] External API call failed:', error.message);
       externalResult = {
         available: false,
-        skipped: true,
-        reason: 'No local matches to verify',
+        error: error.message,
         matches: []
       };
       
-      finalDecision = {
-        decision: 'NO_PLAGIARISM',
-        confidence: 0.95,
-        reasons: ['No similar submissions found in local database'],
-        localMatchCount: 0,
-        externalMatchCount: 0,
-        externalApiAvailable: false
-      };
+      // Fallback decision when external API fails
+      if (similarSubmissions.length > 0) {
+        finalDecision = {
+          plagiarismDetected: similarSubmissions[0].similarity >= 0.85,
+          confidence: similarSubmissions[0].similarity >= 0.85 ? 'high' : 'medium',
+          highestSimilarity: similarSubmissions[0].similarity,
+          detectionMethods: ['local_vector_search'],
+          reasoning: ['External API unavailable, decision based on local similarity only'],
+          toolResults: { local_similarity: similarSubmissions[0].similarity },
+          totalChecksRun: 1
+        };
+      } else {
+        finalDecision = {
+          plagiarismDetected: false,
+          confidence: 'very_low',
+          highestSimilarity: 0,
+          detectionMethods: [],
+          reasoning: ['No local matches found', 'External API unavailable'],
+          toolResults: {},
+          totalChecksRun: 1
+        };
+      }
     }
     
     // Build combined response
