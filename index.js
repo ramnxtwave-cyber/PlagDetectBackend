@@ -343,19 +343,28 @@ app.post("/api/check", async (req, res) => {
     try {
       // Fetch ALL submissions for this question - NO FILTERING
       // External API uses different detection methods (AST, copydetect) and should check ALL
-      console.log(`[Check] Fetching ALL submissions for question ${questionId}...`);
-      const allSubmissions = await vectorDb.getSubmissionsByQuestion(questionId);
-      console.log(`[Check] Found ${allSubmissions.length} total submissions in database`);
-      
+      console.log(
+        `[Check] Fetching ALL submissions for question ${questionId}...`,
+      );
+      const allSubmissions =
+        await vectorDb.getSubmissionsByQuestion(questionId);
+      console.log(
+        `[Check] Found ${allSubmissions.length} total submissions in database`,
+      );
+
       // Prepare ALL submissions for external API - NO FILTERING, NO LIMITS
       // Send every single submission regardless of similarity or any other criteria
       const pastSubmissions = allSubmissions.map((sub) => ({
         studentId: sub.student_id,
         code: sub.code,
       }));
-      
-      console.log(`[Check] Sending ALL ${pastSubmissions.length} submissions to external API (no filtering applied)`);
-      console.log(`[Check] External API will compare against EVERY submission using AST/copydetect/tree-sitter`);
+
+      console.log(
+        `[Check] Sending ALL ${pastSubmissions.length} submissions to external API (no filtering applied)`,
+      );
+      console.log(
+        `[Check] External API will compare against EVERY submission using AST/copydetect/tree-sitter`,
+      );
 
       // Call external API with language parameter
       const externalApiResponse =
