@@ -341,15 +341,23 @@ app.post("/api/check", async (req, res) => {
     console.log(`[Check] Local matches found: ${similarSubmissions.length}`);
 
     try {
+      // Fetch ALL submissions for this question (not just similar ones)
+      // External API uses different detection methods (AST, copydetect) and should check all
+      console.log(`[Check] Fetching all submissions for question ${questionId}...`);
+      const allSubmissions = await vectorDb.getSubmissionsByQuestion(questionId);
+      console.log(`[Check] Found ${allSubmissions.length} total submissions for this question`);
+      
       // Prepare submissions for external API
-      // Include top 5 local matches, or check against empty array if no local matches
-      const pastSubmissions =
-        similarSubmissions.length > 0
-          ? similarSubmissions.slice(0, 5).map((sub) => ({
-              studentId: sub.student_id,
-              code: sub.code,
-            }))
-          : []; // Empty array - external API can still check for patterns/online sources
+      // Send up to 20 most recent submissions (or all if less than 20)
+      // We send all because external API uses different algorithms than semantic similarity
+      const pastSubmissions = allSubmissions
+        .slice(0, 20) // Limit to 20 for performance
+        .map((sub) => ({
+          studentId: sub.student_id,
+          code: sub.code,
+        }));
+      
+      console.log(`[Check] Sending ${pastSubmissions.length} submissions to external API`);
 
       // Call external API with language parameter
       const externalApiResponse =
