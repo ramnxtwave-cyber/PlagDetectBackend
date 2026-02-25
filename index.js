@@ -367,21 +367,85 @@ app.post('/api/check', async (req, res) => {
       }
     }
     
-    // Build combined response
+    // Calculate individual verdicts for each detection method
+    const localVerdict = {
+      method: 'Local Vector Similarity (Semantic)',
+      plagiarism_detected: similarSubmissions.length > 0 && similarSubmissions[0].similarity >= similarityThreshold,
+      confidence: similarSubmissions.length > 0 
+        ? (similarSubmissions[0].similarity >= 0.85 ? 'high' : similarSubmissions[0].similarity >= 0.75 ? 'medium' : 'low')
+        : 'none',
+      max_similarity: similarSubmissions.length > 0 ? Math.round(similarSubmissions[0].similarity * 100) : 0,
+      matches_found: similarSubmissions.length,
+      summary: similarSubmissions.length > 0
+        ? `Found ${similarSubmissions.length} similar submission(s). Highest similarity: ${Math.round(similarSubmissions[0].similarity * 100)}%`
+        : 'No similar submissions found in local database',
+      details: {
+        threshold_used: Math.round(similarityThreshold * 100),
+        top_matches: similarSubmissions.slice(0, maxResults).map(formatSubmission),
+        similar_chunks: similarChunks.slice(0, 10).map(formatChunk),
+      }
+    };
+    
+    const externalVerdict = {
+      method: 'External API (AST + Code Structure)',
+      plagiarism_detected: externalResult?.available && finalDecision?.plagiarismDetected === true,
+      confidence: finalDecision?.confidence || 'unknown',
+      max_similarity: finalDecision?.highestSimilarity 
+        ? Math.round(finalDecision.highestSimilarity * 100) 
+        : 0,
+      matches_found: externalResult?.summary?.length || 0,
+      summary: externalResult?.available 
+        ? (externalResult.summary && externalResult.summary.length > 0
+          ? `External API detected ${externalResult.summary.length} potential match(es)`
+          : 'External API found no matches')
+        : (externalResult?.error 
+          ? `External API unavailable: ${externalResult.error}`
+          : 'External API unavailable'),
+      details: externalResult || { available: false }
+    };
+    
+    // Overall assessment (for display purposes only - doesn't override individual results)
+    const overallAssessment = {
+      status: localVerdict.plagiarism_detected || externalVerdict.plagiarism_detected 
+        ? 'PLAGIARISM_DETECTED' 
+        : 'NO_PLAGIARISM',
+      priority: localVerdict.plagiarism_detected && externalVerdict.plagiarism_detected
+        ? 'HIGH_PRIORITY'
+        : (localVerdict.plagiarism_detected || externalVerdict.plagiarism_detected)
+        ? 'MEDIUM_PRIORITY'
+        : 'LOW_PRIORITY',
+      recommendation: localVerdict.plagiarism_detected || externalVerdict.plagiarism_detected
+        ? 'Review required - one or more detection methods flagged this submission'
+        : 'No plagiarism detected by any method',
+      methods_flagged: [
+        ...(localVerdict.plagiarism_detected ? ['Local Vector Similarity'] : []),
+        ...(externalVerdict.plagiarism_detected ? ['External API Analysis'] : [])
+      ]
+    };
+    
+    // Build comprehensive response with clear separation
     res.json({
       success: true,
       
-      // Local results (existing)
+      // Individual detection results - displayed independently
+      detection_results: {
+        local: localVerdict,
+        external: externalVerdict,
+      },
+      
+      // Overall assessment (combines both, but doesn't compromise either)
+      overall: overallAssessment,
+      
+      // Detailed data for each method
       local_result: {
         summary,
         similarSubmissions: similarSubmissions.slice(0, maxResults).map(formatSubmission),
         similarChunks: similarChunks.slice(0, 10).map(formatChunk),
       },
       
-      // External API results (new)
       external_result: externalResult,
       
-      // Final decision (new)
+      // Legacy final_decision (kept for backward compatibility)
       final_decision: finalDecision,
       
       // Backward compatibility - keep original structure
