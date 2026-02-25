@@ -9,7 +9,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // External API configuration
-const EXTERNAL_API_URL = process.env.EXTERNAL_PLAGIARISM_API_URL || 'https://pd-uaj3.onrender.com/api/check';
+const EXTERNAL_API_URL = process.env.EXTERNAL_PLAGIARISM_API_URL || 'https://plagdetectbackendpy-production.up.railway.app/api/check';
 const EXTERNAL_API_TIMEOUT = 30000; // 30 seconds (increased for external service)
 const EXTERNAL_API_KEY = process.env.EXTERNAL_PLAGIARISM_API_KEY || '';
 
