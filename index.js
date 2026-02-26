@@ -63,12 +63,14 @@ app.get("/api/health", (req, res) => {
 app.post("/api/submit", async (req, res) => {
   try {
     const { code, studentId, questionId, language = "javascript", useNormalization = true } = req.body;
+    const normalizedStudentId = studentId?.trim?.();
+    const normalizedQuestionId = questionId?.trim?.();
 
     // Get custom API key from header if provided
     const customApiKey = req.headers["x-openai-api-key"] || null;
 
     // Validate input
-    if (!code || !studentId || !questionId) {
+    if (!code || !normalizedStudentId || !normalizedQuestionId) {
       return res.status(400).json({
         success: false,
         error: "Missing required fields: code, studentId, questionId",
@@ -83,14 +85,14 @@ app.post("/api/submit", async (req, res) => {
     }
 
     console.log(
-      `[Submit] Processing submission from ${studentId} for question ${questionId}`,
+      `[Submit] Processing submission from ${normalizedStudentId} for question ${normalizedQuestionId}`,
     );
     if (customApiKey) {
       console.log(`[Submit] Using custom API key`);
     }
 
     // Generate submission ID
-    const submissionId = `${studentId}_${questionId}_${Date.now()}`;
+    const submissionId = `${normalizedStudentId}_${normalizedQuestionId}_${Date.now()}`;
     console.log(`[Submit] Generated submission ID: ${submissionId}`);
 
     // Step 1: Generate whole-code embedding
@@ -119,8 +121,8 @@ app.post("/api/submit", async (req, res) => {
     // Step 3: Save everything to Pinecone
     await vectorDb.saveSubmission({
       submissionId,
-      studentId,
-      questionId,
+      studentId: normalizedStudentId,
+      questionId: normalizedQuestionId,
       code,
       embedding: wholeCodeEmbedding,
       chunks: chunksWithEmbeddings,
@@ -208,12 +210,13 @@ app.post("/api/check", async (req, res) => {
       maxResults = 5,
       useNormalization = true,
     } = req.body;
+    const normalizedQuestionId = questionId?.trim?.();
 
     // Get custom API key from header if provided
     const customApiKey = req.headers["x-openai-api-key"] || null;
 
     // Validate input
-    if (!code || !questionId) {
+    if (!code || !normalizedQuestionId) {
       return res.status(400).json({
         success: false,
         error: "Missing required fields: code, questionId",
@@ -227,26 +230,34 @@ app.post("/api/check", async (req, res) => {
       });
     }
 
-    console.log(`[Check] Checking similarity for question ${questionId}`);
+    console.log(`[Check] Checking similarity for question ${normalizedQuestionId}`);
     if (customApiKey) {
       console.log(`[Check] Using custom API key`);
     }
 
     // Check if submissions exist for this question
-    console.log(`[Check] Verifying submissions exist for question ${questionId}...`);
-    const existingSubmissions = await vectorDb.getSubmissionsByQuestion(questionId);
-    
+    // Retry once after a short delay: Pinecone has eventual consistency, so a submission
+    // that was just added may not be visible for 1–3 seconds.
+    console.log(`[Check] Verifying submissions exist for question ${normalizedQuestionId}...`);
+    let existingSubmissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId);
+
     if (!existingSubmissions || existingSubmissions.length === 0) {
-      console.log(`[Check] No submissions found for question ${questionId}`);
+      console.log(`[Check] No submissions on first try; retrying in 2.5s (Pinecone eventual consistency)...`);
+      await new Promise((r) => setTimeout(r, 2500));
+      existingSubmissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId);
+    }
+
+    if (!existingSubmissions || existingSubmissions.length === 0) {
+      console.log(`[Check] No submissions found for question ${normalizedQuestionId}`);
       return res.status(404).json({
         success: false,
-        error: `No submissions found for question "${questionId}". Please submit code for this question first before checking for similarity.`,
+        error: `No submissions found for question "${normalizedQuestionId}". Please submit code for this question first before checking for similarity.`,
         errorType: 'NO_SUBMISSIONS',
-        questionId: questionId
+        questionId: normalizedQuestionId
       });
     }
-    
-    console.log(`[Check] Found ${existingSubmissions.length} existing submissions for question ${questionId}`);
+
+    console.log(`[Check] Found ${existingSubmissions.length} existing submissions for question ${normalizedQuestionId}`);
 
     // Step 1: Generate embedding for the submitted code (with custom API key if provided)
     const codeEmbedding = await embeddings.generateCodeEmbedding(
@@ -263,7 +274,7 @@ app.post("/api/check", async (req, res) => {
     const searchThreshold = Math.min(0.3, similarityThreshold);
     const similarSubmissions = await vectorDb.findSimilarSubmissions(
       codeEmbedding,
-      questionId,
+      normalizedQuestionId,
       50, // Get more results (filter later)
       searchThreshold,
     );
@@ -292,7 +303,7 @@ app.post("/api/check", async (req, res) => {
           // Use lower threshold for chunks too
           const matches = await vectorDb.findSimilarChunks(
             chunk.embedding,
-            questionId,
+            normalizedQuestionId,
             10,
             searchThreshold, // Use same lower threshold
           );
@@ -381,7 +392,7 @@ app.post("/api/check", async (req, res) => {
       // Call external API with language parameter
       const externalApiResponse =
         await externalPlagiarism.checkExternalPlagiarism(
-          questionId,
+          normalizedQuestionId,
           {
             studentId: "current_check",
             code: code,
@@ -613,12 +624,12 @@ app.post("/api/check", async (req, res) => {
  */
 app.get("/api/submissions/:questionId", async (req, res) => {
   try {
-    const { questionId } = req.params;
-    const submissions = await vectorDb.getSubmissionsByQuestion(questionId);
+    const normalizedQuestionId = req.params.questionId?.trim?.();
+    const submissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId);
 
     res.json({
       success: true,
-      questionId,
+      questionId: normalizedQuestionId,
       count: submissions.length,
       submissions: submissions.map((s) => ({
         id: s.id,
@@ -643,19 +654,19 @@ app.get("/api/submissions/:questionId", async (req, res) => {
  */
 app.post('/api/reembed/:questionId', async (req, res) => {
   try {
-    const { questionId } = req.params;
+    const normalizedQuestionId = req.params.questionId?.trim?.();
     const { useNormalization = true } = req.body;
     const customApiKey = req.headers["x-openai-api-key"] || null;
     
-    console.log(`[Re-embed] Starting re-embedding for question ${questionId} (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
+    console.log(`[Re-embed] Starting re-embedding for question ${normalizedQuestionId} (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
     
     // Get all submissions for this question
-    const submissions = await vectorDb.getSubmissionsByQuestion(questionId);
+    const submissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId);
     
     if (!submissions || submissions.length === 0) {
       return res.status(404).json({
         success: false,
-        error: `No submissions found for question "${questionId}"`,
+        error: `No submissions found for question "${normalizedQuestionId}"`,
       });
     }
     
@@ -702,7 +713,7 @@ app.post('/api/reembed/:questionId', async (req, res) => {
     
     res.json({
       success: true,
-      questionId,
+      questionId: normalizedQuestionId,
       totalSubmissions: submissions.length,
       successCount,
       failCount,

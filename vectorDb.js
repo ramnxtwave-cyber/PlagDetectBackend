@@ -207,13 +207,23 @@ export async function getSubmissionsByQuestion(questionId) {
     if (!index) {
       throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
     }
+
+    const normalizedQuestionId = questionId?.trim?.();
+    if (!normalizedQuestionId) {
+      throw new Error('Question ID is required');
+    }
+
+    // Pinecone query vectors cannot be all zeros. Use a tiny non-zero probe
+    // vector only to retrieve matches filtered by questionId.
+    const probeVector = Array(1536).fill(0);
+    probeVector[0] = 0.001;
     
     const queryResponse = await index.query({
-      vector: Array(1536).fill(0),
-      topK: 10000,
+      vector: probeVector,
+      topK: 1000,
       filter: {
         type: { $eq: 'submission' },
-        questionId: { $eq: questionId }
+        questionId: { $eq: normalizedQuestionId }
       },
       includeMetadata: true
     });
@@ -227,7 +237,7 @@ export async function getSubmissionsByQuestion(questionId) {
     }));
   } catch (error) {
     console.error('[Pinecone Get Error]', error.message);
-    return [];
+    throw new Error(`[Pinecone Get Error] ${error.message}`);
   }
 }
 
