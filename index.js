@@ -309,11 +309,12 @@ app.post("/api/check", async (req, res) => {
       threshold: similarityThreshold,
     };
 
-    // Format response (limit code length in response)
+    // Format response (include full code for diff)
     const formatSubmission = (sub) => ({
       submissionId: sub.id,
       studentId: sub.student_id,
-      similarity: Math.round(sub.similarity * 1000) / 1000, // Round to 3 decimals
+      similarity: Math.round(sub.similarity * 1000) / 1000,
+      code: sub.code, // Full code for diff
       codePreview:
         sub.code.substring(0, 200) + (sub.code.length > 200 ? "..." : ""),
       codeLength: sub.code.length,
@@ -341,8 +342,7 @@ app.post("/api/check", async (req, res) => {
     console.log(`[Check] Local matches found: ${similarSubmissions.length}`);
 
     try {
-      // Fetch ALL submissions for this question - NO FILTERING
-      // External API uses different detection methods (AST, copydetect) and should check ALL
+      // Fetch ALL submissions for this question
       console.log(
         `[Check] Fetching ALL submissions for question ${questionId}...`,
       );
@@ -351,6 +351,11 @@ app.post("/api/check", async (req, res) => {
       console.log(
         `[Check] Found ${allSubmissions.length} total submissions in database`,
       );
+      
+      const submissionsForExternal = allSubmissions.map(sub => ({
+        studentId: sub.student_id || sub.id,
+        code: sub.code
+      }));
 
       // Prepare ALL submissions for external API - NO FILTERING, NO LIMITS
       // Send every single submission regardless of similarity or any other criteria
@@ -378,8 +383,9 @@ app.post("/api/check", async (req, res) => {
           language,
         );
 
+      // Pass submissions to formatExternalResult so it can include full code
       externalResult =
-        externalPlagiarism.formatExternalResult(externalApiResponse);
+        externalPlagiarism.formatExternalResult(externalApiResponse, pastSubmissions);
 
       // Determine final decision based on both local and external results
       const hasLocalMatch = similarSubmissions.length > 0;

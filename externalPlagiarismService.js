@@ -62,7 +62,7 @@ export async function checkExternalPlagiarism(
     });
 
     console.log("[External API] Response received successfully");
-    console.log(response.data, "response data");
+    console.log(JSON.stringify(response.data), "response data");
     console.log(
       `[External API] Tools run: ${response.data.comparisons?.length || 0}`,
     );
@@ -83,9 +83,10 @@ export async function checkExternalPlagiarism(
 /**
  * Format external API result for frontend consumption
  * @param {Object} externalResult - Raw external API response
+ * @param {Array} pastSubmissions - Original submissions with full code
  * @returns {Object} - Formatted result
  */
-export function formatExternalResult(externalResult) {
+export function formatExternalResult(externalResult, pastSubmissions = []) {
   if (!externalResult) {
     return {
       available: false,
@@ -95,6 +96,13 @@ export function formatExternalResult(externalResult) {
   }
 
   try {
+    // Create a map of student IDs to their full code
+    const studentCodeMap = {};
+    pastSubmissions.forEach(sub => {
+      const studentId = sub.studentId || sub.student_id || sub.id;
+      studentCodeMap[studentId] = sub.code;
+    });
+
     return {
       available: true,
       mainStudentId: externalResult.main_student_id,
@@ -102,6 +110,7 @@ export function formatExternalResult(externalResult) {
         studentId: item.other_student_id,
         avgSimilarity: item.avg_similarity,
         toolCount: item.tool_count,
+        code: studentCodeMap[item.other_student_id] || null, // Add full code
       })),
       comparisons: (externalResult.comparisons || []).map((comp) => ({
         tool: comp.tool,
@@ -110,6 +119,7 @@ export function formatExternalResult(externalResult) {
         results: (comp.results || []).map((result) => ({
           studentId: result.other_student_id,
           similarity: result.similarity,
+          code: studentCodeMap[result.other_student_id] || null, // Add full code
           details: result,
         })),
       })),
