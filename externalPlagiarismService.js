@@ -5,6 +5,7 @@
 
 import axios from "axios";
 import dotenv from "dotenv";
+import scoringEngine from "./scoringEngine.js";
 
 dotenv.config();
 
@@ -67,6 +68,7 @@ export async function checkExternalPlagiarism(
       `[External API] Tools run: ${response.data.comparisons?.length || 0}`,
     );
 
+    console.log(JSON.stringify(response.data), "response data");
     return response.data;
   } catch (error) {
     console.error("[External API Error]", error.message);
@@ -98,7 +100,7 @@ export function formatExternalResult(externalResult, pastSubmissions = []) {
   try {
     // Create a map of student IDs to their full code
     const studentCodeMap = {};
-    pastSubmissions.forEach(sub => {
+    pastSubmissions.forEach((sub) => {
       const studentId = sub.studentId || sub.student_id || sub.id;
       studentCodeMap[studentId] = sub.code;
     });
@@ -135,78 +137,99 @@ export function formatExternalResult(externalResult, pastSubmissions = []) {
 }
 
 /**
- * Determine final plagiarism decision based on all detection layers
- * @param {boolean} localMatch - Whether local similarity found matches
+ * Determine final plagiarism decision using new scoring engine
+ * FIXED: Balanced scoring, proper weights, always shows real percentages
+ *
+ * @param {Object} localResult - Local similarity results with maxSimilarity
  * @param {Object} externalResult - Formatted external API result
- * @param {number} threshold - Similarity threshold for plagiarism
- * @returns {Object} - Final decision with confidence and methods used
+ * @param {number} threshold - Similarity threshold for plagiarism (default 0.75)
+ * @param {Object} structuralData - Data for structural penalty (currentCode, comparedCode, language)
+ * @returns {Object} - Comprehensive plagiarism report
  */
 export function determineFinalDecision(
-  localMatch,
+  localResult,
   externalResult,
   threshold = 0.75,
+  structuralData = {},
 ) {
-  const detectionMethods = [];
-  let plagiarismConfirmed = false;
-  let highestSimilarity = 0;
-  let reasoning = [];
+  console.log(
+    "[Plagiarism Scoring] Generating comprehensive report with new scoring engine",
+  );
+
+  // Use new scoring engine for balanced, accurate results with structural penalty
+  const report = scoringEngine.generatePlagiarismReport(
+    localResult,
+    externalResult,
+    threshold,
+    structuralData,
+  );
+
+  // Add tool results for backward compatibility
   const toolResults = {};
 
-  // Layer 1: Semantic Embeddings (Local)
-  if (localMatch) {
-    detectionMethods.push("semantic_embeddings");
-    plagiarismConfirmed = true;
-    reasoning.push("Semantic similarity detected via embeddings");
-  }
-
-  // Process external API tool results
-  if (externalResult?.available && externalResult.comparisons) {
-    externalResult.comparisons.forEach((comparison) => {
-      if (!comparison.available) return;
+  if (externalResult?.comparisons) {
+    externalResult.comparisons.forEach((comp) => {
+      if (!comp.available || !comp.results || comp.results.length === 0) return;
 
       const maxSimilarity = Math.max(
-        ...comparison.results.map((r) => r.similarity),
+        ...comp.results.map((r) => r.similarity || 0),
       );
 
-      if (maxSimilarity >= threshold) {
-        detectionMethods.push(comparison.tool);
-        plagiarismConfirmed = true;
-        reasoning.push(
-          `${comparison.tool} detected similarity: ${(maxSimilarity * 100).toFixed(1)}%`,
-        );
-      }
-
-      toolResults[comparison.tool] = {
+      toolResults[comp.tool] = {
         available: true,
         maxSimilarity,
-        matchCount: comparison.results.filter((r) => r.similarity >= threshold)
+        matchCount: comp.results.filter((r) => r.similarity >= threshold)
           .length,
       };
-
-      highestSimilarity = Math.max(highestSimilarity, maxSimilarity);
     });
   }
 
-  // Determine confidence based on number of detection methods
-  let confidence = "low";
-  if (detectionMethods.length >= 4) {
-    confidence = "very_high";
-  } else if (detectionMethods.length === 3) {
-    confidence = "high";
-  } else if (detectionMethods.length === 2) {
-    confidence = "medium";
-  } else if (detectionMethods.length === 1) {
-    confidence = "low";
-  }
+  // Log detailed breakdown
+  console.log(
+    "[Plagiarism Scoring] Overall Score:",
+    (report.overallScore * 100).toFixed(1) + "%",
+  );
+  console.log("[Plagiarism Scoring] Type:", report.plagiarismType);
+  console.log("[Plagiarism Scoring] Severity:", report.severity);
+  console.log("[Plagiarism Scoring] Confidence:", report.confidence);
+  console.log(
+    "[Plagiarism Scoring] Methods:",
+    report.detectionMethods.join(", "),
+  );
 
   return {
-    plagiarismDetected: plagiarismConfirmed,
-    confidence,
-    highestSimilarity,
-    detectionMethods,
-    reasoning,
+    // Core decision (using new balanced scoring)
+    plagiarismDetected: report.plagiarismDetected,
+    overallScore: report.overallScore,
+    overallPercentage: report.overallPercentage,
+
+    // Classification
+    plagiarismType: report.plagiarismType,
+    severity: report.severity,
+
+    // Confidence
+    confidence: report.confidence,
+    methodCount: report.methodCount,
+
+    // Detailed breakdown
+    scoreBreakdown: report.scoreBreakdown,
+
+    // Detection details
+    detectionMethods: report.detectionMethods,
+    reasoning: report.reasoning,
+
+    // Backward compatibility fields
+    highestSimilarity: report.overallScore, // Use overall score, not just one method
     toolResults,
-    totalChecksRun: Object.keys(toolResults).length + 1,
+    totalChecksRun: report.methodCount,
+
+    // Threshold context
+    threshold,
+    isAboveThreshold: report.isAboveThreshold,
+
+    // User-friendly explanation
+    explanation: report.explanation,
+    displayMessage: report.displayMessage,
   };
 }
 

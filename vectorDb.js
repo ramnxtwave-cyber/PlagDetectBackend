@@ -116,7 +116,7 @@ export async function saveSubmission(data) {
  * @param {number} limit - Number of results
  * @param {number} minSimilarity - Minimum similarity threshold
  */
-export async function findSimilarSubmissions(embedding, questionId, limit = 5, minSimilarity = 0.7) {
+export async function findSimilarSubmissions(embedding, questionId, limit = 5, minSimilarity = 0.3) {
   try {
     if (!index) {
       throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
@@ -124,7 +124,7 @@ export async function findSimilarSubmissions(embedding, questionId, limit = 5, m
     
     const queryResponse = await index.query({
       vector: embedding,
-      topK: 50,
+      topK: 100, // Get more results
       filter: {
         type: { $eq: 'submission' },
         questionId: { $eq: questionId }
@@ -132,6 +132,8 @@ export async function findSimilarSubmissions(embedding, questionId, limit = 5, m
       includeMetadata: true
     });
     
+    // Return ALL results above minSimilarity (even if low)
+    // Scoring engine will handle the actual threshold filtering
     const results = queryResponse.matches
       .filter(match => match.score >= minSimilarity)
       .slice(0, limit)
@@ -143,7 +145,10 @@ export async function findSimilarSubmissions(embedding, questionId, limit = 5, m
         similarity: match.score
       }));
     
-    console.log(`[Pinecone] Found ${results.length} similar submissions`);
+    console.log(`[Pinecone] Found ${results.length} submissions (threshold: ${minSimilarity})`);
+    if (results.length > 0) {
+      console.log(`[Pinecone] Top similarity: ${(results[0].similarity * 100).toFixed(1)}%`);
+    }
     return results;
   } catch (error) {
     console.error('[Pinecone Search Error]', error.message);

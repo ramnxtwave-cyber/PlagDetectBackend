@@ -12,6 +12,7 @@ import * as vectorDb from "./vectorDb.js";
 import * as embeddings from "./embeddings.js";
 import * as chunking from "./chunking.js";
 import * as externalPlagiarism from "./externalPlagiarismService.js";
+import * as scoringEngine from "./scoringEngine.js";
 
 dotenv.config();
 
@@ -61,7 +62,7 @@ app.get("/api/health", (req, res) => {
  */
 app.post("/api/submit", async (req, res) => {
   try {
-    const { code, studentId, questionId, language = "javascript" } = req.body;
+    const { code, studentId, questionId, language = "javascript", useNormalization = true } = req.body;
 
     // Get custom API key from header if provided
     const customApiKey = req.headers["x-openai-api-key"] || null;
@@ -97,8 +98,9 @@ app.post("/api/submit", async (req, res) => {
       code,
       language,
       customApiKey,
+      useNormalization,
     );
-    console.log(`[Submit] Generated whole-code embedding`);
+    console.log(`[Submit] Generated whole-code embedding (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
 
     // Step 2: Extract and embed chunks
     const codeChunks = chunking.extractCodeChunks(code, language);
@@ -110,6 +112,7 @@ app.post("/api/submit", async (req, res) => {
             codeChunks,
             language,
             customApiKey,
+            useNormalization,
           )
         : [];
 
@@ -203,6 +206,7 @@ app.post("/api/check", async (req, res) => {
       language = "javascript",
       similarityThreshold = 0.75,
       maxResults = 5,
+      useNormalization = true,
     } = req.body;
 
     // Get custom API key from header if provided
@@ -228,23 +232,43 @@ app.post("/api/check", async (req, res) => {
       console.log(`[Check] Using custom API key`);
     }
 
+    // Check if submissions exist for this question
+    console.log(`[Check] Verifying submissions exist for question ${questionId}...`);
+    const existingSubmissions = await vectorDb.getSubmissionsByQuestion(questionId);
+    
+    if (!existingSubmissions || existingSubmissions.length === 0) {
+      console.log(`[Check] No submissions found for question ${questionId}`);
+      return res.status(404).json({
+        success: false,
+        error: `No submissions found for question "${questionId}". Please submit code for this question first before checking for similarity.`,
+        errorType: 'NO_SUBMISSIONS',
+        questionId: questionId
+      });
+    }
+    
+    console.log(`[Check] Found ${existingSubmissions.length} existing submissions for question ${questionId}`);
+
     // Step 1: Generate embedding for the submitted code (with custom API key if provided)
     const codeEmbedding = await embeddings.generateCodeEmbedding(
       code,
       language,
       customApiKey,
+      useNormalization,
     );
-    console.log(`[Check] Generated embedding for submission`);
+    console.log(`[Check] Generated embedding for submission (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
 
     // Step 2: Find similar whole submissions
+    // Use LOWER threshold (0.3) to catch more matches, let scoring engine filter later
+    // This prevents missing matches due to embedding strategy mismatches
+    const searchThreshold = Math.min(0.3, similarityThreshold);
     const similarSubmissions = await vectorDb.findSimilarSubmissions(
       codeEmbedding,
       questionId,
-      maxResults,
-      similarityThreshold,
+      50, // Get more results (filter later)
+      searchThreshold,
     );
     console.log(
-      `[Check] Found ${similarSubmissions.length} similar submissions`,
+      `[Check] Found ${similarSubmissions.length} submissions above ${searchThreshold} threshold`,
     );
 
     // Step 3: Extract and check chunks
@@ -260,15 +284,17 @@ app.post("/api/check", async (req, res) => {
           codeChunks,
           language,
           customApiKey,
+          useNormalization,
         );
 
       const chunkSimilarityPromises = queryChunksWithEmbeddings.map(
         async (chunk) => {
+          // Use lower threshold for chunks too
           const matches = await vectorDb.findSimilarChunks(
             chunk.embedding,
             questionId,
-            5,
-            similarityThreshold,
+            10,
+            searchThreshold, // Use same lower threshold
           );
 
           return matches.map((match) => ({
@@ -342,33 +368,14 @@ app.post("/api/check", async (req, res) => {
     console.log(`[Check] Local matches found: ${similarSubmissions.length}`);
 
     try {
-      // Fetch ALL submissions for this question
-      console.log(
-        `[Check] Fetching ALL submissions for question ${questionId}...`,
-      );
-      const allSubmissions =
-        await vectorDb.getSubmissionsByQuestion(questionId);
-      console.log(
-        `[Check] Found ${allSubmissions.length} total submissions in database`,
-      );
-      
-      const submissionsForExternal = allSubmissions.map(sub => ({
+      // Use existingSubmissions we already fetched and validated
+      const submissionsForExternal = existingSubmissions.map(sub => ({
         studentId: sub.student_id || sub.id,
         code: sub.code
       }));
 
-      // Prepare ALL submissions for external API - NO FILTERING, NO LIMITS
-      // Send every single submission regardless of similarity or any other criteria
-      const pastSubmissions = allSubmissions.map((sub) => ({
-        studentId: sub.student_id,
-        code: sub.code,
-      }));
-
       console.log(
-        `[Check] Sending ALL ${pastSubmissions.length} submissions to external API (no filtering applied)`,
-      );
-      console.log(
-        `[Check] External API will compare against EVERY submission using AST/copydetect/tree-sitter`,
+        `[Check] Sending ALL ${submissionsForExternal.length} submissions to external API`,
       );
 
       // Call external API with language parameter
@@ -379,20 +386,35 @@ app.post("/api/check", async (req, res) => {
             studentId: "current_check",
             code: code,
           },
-          pastSubmissions,
+          submissionsForExternal,
           language,
         );
 
       // Pass submissions to formatExternalResult so it can include full code
       externalResult =
-        externalPlagiarism.formatExternalResult(externalApiResponse, pastSubmissions);
+        externalPlagiarism.formatExternalResult(externalApiResponse, submissionsForExternal);
 
-      // Determine final decision based on both local and external results
-      const hasLocalMatch = similarSubmissions.length > 0;
+      // Prepare local result for scoring engine (with maxSimilarity)
+      const localResultForScoring = {
+        hasMatches: similarSubmissions.length > 0,
+        maxSimilarity: similarSubmissions.length > 0 ? similarSubmissions[0].similarity : 0,
+        matchCount: similarSubmissions.length,
+        submissions: similarSubmissions
+      };
+
+      // Prepare structural data for penalty calculation
+      const structuralData = {
+        currentCode: code,
+        comparedCode: similarSubmissions.length > 0 ? similarSubmissions[0].code : '',
+        language: language
+      };
+
+      // Determine final decision using new scoring engine with structural penalty
       finalDecision = externalPlagiarism.determineFinalDecision(
-        hasLocalMatch,
+        localResultForScoring,
         externalResult,
         similarityThreshold,
+        structuralData,
       );
 
       console.log(
@@ -406,31 +428,30 @@ app.post("/api/check", async (req, res) => {
         matches: [],
       };
 
-      // Fallback decision when external API fails
-      if (similarSubmissions.length > 0) {
-        finalDecision = {
-          plagiarismDetected: similarSubmissions[0].similarity >= 0.85,
-          confidence:
-            similarSubmissions[0].similarity >= 0.85 ? "high" : "medium",
-          highestSimilarity: similarSubmissions[0].similarity,
-          detectionMethods: ["local_vector_search"],
-          reasoning: [
-            "External API unavailable, decision based on local similarity only",
-          ],
-          toolResults: { local_similarity: similarSubmissions[0].similarity },
-          totalChecksRun: 1,
-        };
-      } else {
-        finalDecision = {
-          plagiarismDetected: false,
-          confidence: "very_low",
-          highestSimilarity: 0,
-          detectionMethods: [],
-          reasoning: ["No local matches found", "External API unavailable"],
-          toolResults: {},
-          totalChecksRun: 1,
-        };
-      }
+      // Fallback decision when external API fails (still use scoring engine)
+      const localResultForScoring = {
+        hasMatches: similarSubmissions.length > 0,
+        maxSimilarity: similarSubmissions.length > 0 ? similarSubmissions[0].similarity : 0,
+        matchCount: similarSubmissions.length,
+        submissions: similarSubmissions
+      };
+      
+      // Prepare structural data for penalty calculation
+      const structuralData = {
+        currentCode: code,
+        comparedCode: similarSubmissions.length > 0 ? similarSubmissions[0].code : '',
+        language: language
+      };
+      
+      finalDecision = externalPlagiarism.determineFinalDecision(
+        localResultForScoring,
+        { available: false, comparisons: [] }, // Empty external result
+        similarityThreshold,
+        structuralData,
+      );
+      
+      // Add note about external API failure
+      finalDecision.reasoning.push('Note: External API verification unavailable');
     }
 
     // Calculate individual verdicts for each detection method
@@ -608,6 +629,88 @@ app.get("/api/submissions/:questionId", async (req, res) => {
     });
   } catch (error) {
     console.error("[Get Submissions Error]", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/reembed/:questionId
+ * Re-generate embeddings for all submissions of a question
+ * Use this after updating embedding logic to refresh old submissions
+ */
+app.post('/api/reembed/:questionId', async (req, res) => {
+  try {
+    const { questionId } = req.params;
+    const { useNormalization = true } = req.body;
+    const customApiKey = req.headers["x-openai-api-key"] || null;
+    
+    console.log(`[Re-embed] Starting re-embedding for question ${questionId} (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
+    
+    // Get all submissions for this question
+    const submissions = await vectorDb.getSubmissionsByQuestion(questionId);
+    
+    if (!submissions || submissions.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: `No submissions found for question "${questionId}"`,
+      });
+    }
+    
+    console.log(`[Re-embed] Re-embedding ${submissions.length} submissions...`);
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const sub of submissions) {
+      try {
+        // Detect language from code if not stored
+        const language = 'python'; // Default, improve later
+        
+        // Re-generate embedding with current normalization setting
+        const newEmbedding = await embeddings.generateCodeEmbedding(
+          sub.code,
+          language,
+          customApiKey,
+          useNormalization
+        );
+        
+        // Re-generate chunk embeddings
+        const chunks = chunking.extractCodeChunks(sub.code, language);
+        const chunksWithEmbeddings = chunks.length > 0
+          ? await embeddings.generateChunkEmbeddings(chunks, language, customApiKey, useNormalization)
+          : [];
+        
+        // Save updated embeddings
+        await vectorDb.saveSubmission({
+          submissionId: sub.id,
+          studentId: sub.student_id,
+          questionId: sub.question_id,
+          code: sub.code,
+          embedding: newEmbedding,
+          chunks: chunksWithEmbeddings
+        });
+        
+        successCount++;
+        console.log(`[Re-embed] ✓ Re-embedded ${sub.id} (${successCount}/${submissions.length})`);
+      } catch (error) {
+        failCount++;
+        console.error(`[Re-embed] ✗ Failed to re-embed ${sub.id}:`, error.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      questionId,
+      totalSubmissions: submissions.length,
+      successCount,
+      failCount,
+      message: `Successfully re-embedded ${successCount} out of ${submissions.length} submissions`
+    });
+    
+  } catch (error) {
+    console.error('[Re-embed Error]', error);
     res.status(500).json({
       success: false,
       error: error.message,
