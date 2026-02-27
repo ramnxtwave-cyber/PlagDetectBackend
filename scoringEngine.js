@@ -9,11 +9,11 @@ import * as codeNormalizer from './codeNormalizer.js';
 /**
  * Calculate weighted plagiarism score from multiple detection methods
  * 
- * SCORING WEIGHTS (Tree-Sitter AST emphasized for structural detection):
- * - Semantic Embeddings: 20%
- * - CopyDetect: 20%
- * - Tree-Sitter AST: 40% (best at detecting structural differences)
- * - Difflib: 20%
+ * SCORING WEIGHTS (difflib excluded — 0% weight):
+ * - Semantic Embeddings: 25%
+ * - CopyDetect: 25%
+ * - Tree-Sitter AST: 50% (best at detecting structural differences)
+ * - Difflib: 0% (excluded from final similarity)
  * 
  * STRUCTURAL PENALTY:
  * - Applied when function/class decomposition differs significantly
@@ -35,10 +35,10 @@ export function calculateWeightedScore(localResult, externalResult, options = {}
   };
   
   const weights = {
-    semantic_embeddings: 0.20, // 20%
-    copydetect: 0.20,          // 20%
-    treesitter: 0.40,          // 40% - best at detecting structural differences
-    difflib: 0.20              // 20%
+    semantic_embeddings: 0.25, // 25%
+    copydetect: 0.50,          // 25%
+    treesitter: 0.25,          // 50% - best at detecting structural differences
+    difflib: 0                 // 0% - excluded from final similarity
   };
   
   const available = {
