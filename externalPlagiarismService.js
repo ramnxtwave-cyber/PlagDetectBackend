@@ -6,6 +6,7 @@
 import axios from "axios";
 import dotenv from "dotenv";
 import scoringEngine from "./scoringEngine.js";
+import { resolveLanguage } from "./codeNormalizer.js";
 
 dotenv.config();
 
@@ -32,6 +33,7 @@ export async function checkExternalPlagiarism(
   try {
     console.log("[External API] Calling external plagiarism check...");
 
+    const lang = resolveLanguage(language);
     // Build request payload in new format
     const payload = {
       main_student: {
@@ -42,11 +44,9 @@ export async function checkExternalPlagiarism(
         id: sub.studentId || sub.student_id || sub.id,
         code: sub.code,
       })),
-      language: language,
-      tools: ["copydetect", "difflib", `treesitter_${language}`],
+      language: lang,
+      tools: ["copydetect", "difflib", `treesitter_${lang}`],
     };
-
-    console.log(payload, "payload");
 
     console.log(
       `[External API] Checking against ${pastSubmissions.length} submissions`,
@@ -63,12 +63,9 @@ export async function checkExternalPlagiarism(
     });
 
     console.log("[External API] Response received successfully");
-    console.log(JSON.stringify(response.data), "response data");
     console.log(
       `[External API] Tools run: ${response.data.comparisons?.length || 0}`,
     );
-
-    console.log(JSON.stringify(response.data), "response data");
     return response.data;
   } catch (error) {
     console.error("[External API Error]", error.message);

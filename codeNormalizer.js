@@ -4,6 +4,19 @@
  * This helps embeddings focus on logic and structure rather than naming
  */
 
+/** Normalize language aliases to canonical names */
+export function resolveLanguage(lang) {
+  const aliases = {
+    js: 'javascript',
+    ts: 'javascript',
+    typescript: 'javascript',
+    py: 'python',
+    'c++': 'cpp',
+    cc: 'cpp',
+  };
+  return aliases[lang?.toLowerCase?.()] || lang;
+}
+
 /**
  * Normalize variable names to generic placeholders
  * This helps embeddings recognize similar logic despite different variable names
@@ -23,10 +36,10 @@ export function normalizeVariableNames(code, language) {
     // Language-specific patterns
     const patterns = {
       python: [
-        /def\s+([a-z_][a-z0-9_]*)\s*\(/gi,  // function definitions (first priority)
-        /for\s+([a-z_][a-z0-9_]*)\s+in\b/gi,  // for loops
-        /\b([a-z_][a-z0-9_]*)\s*=/gi,  // variable assignments
-        /\(([a-z_][a-z0-9_]*)\s*[,\)]/gi,  // function parameters
+        /def\s+([a-z_][a-z0-9_]*)\s*\(/gi,       // function definitions (first priority)
+        /for\s+([a-z_][a-z0-9_]*)\s+in\b/gi,      // for loop variables
+        /\b([a-z_][a-z0-9_]*)\s*=(?!=)/gi,         // assignments only (not == comparisons)
+        /\(([a-z_][a-z0-9_]*)\s*[,\)]/gi,          // function parameters
       ],
       javascript: [
         /\b(?:const|let|var)\s+([a-z_$][a-z0-9_$]*)/gi,  // variable declarations
@@ -34,15 +47,23 @@ export function normalizeVariableNames(code, language) {
         /\(([a-z_$][a-z0-9_$]*)\s*(?:,|\))/gi,  // function parameters
       ],
       java: [
-        /\b(?:int|String|boolean|double|float)\s+([a-z_][a-z0-9_]*)/gi,  // variable declarations
+        /\b(?:public|private|protected|static|final)\s+[\w<>\[\]\s,?]+\s+([a-z_][a-z0-9_]*)\s*\(/gi,  // method params (capture first param name from decl)
+        /\b(?:int|long|short|byte|char|String|boolean|double|float)\s+([a-z_][a-z0-9_]*)/gi,
+        /\b(?:List|Map|Set|ArrayList|HashMap|HashSet)\s*<[^>]*>\s+([a-z_][a-z0-9_]*)/gi,
+        /\b([a-z_][a-z0-9_]*)\s*=(?!=)/gi,  // assignments (not ==)
+        /\(([a-z_][a-z0-9_]*)\s*[,\)]/gi,   // parameters
       ],
       cpp: [
-        /\b(?:int|string|bool|double|float|auto)\s+([a-z_][a-z0-9_]*)/gi,  // variable declarations
+        /\b(?:int|long|short|char|unsigned|size_t|string|bool|double|float|auto|void)\s+([a-z_][a-z0-9_]*)/gi,
+        /\b(?:vector|map|set|unordered_map)\s*<[^>]*>\s+([a-z_][a-z0-9_]*)/gi,
+        /\b([a-z_][a-z0-9_]*)\s*=(?!=)/gi,  // assignments (not ==)
+        /\(([a-z_][a-z0-9_]*)\s*[,\)]/gi,   // parameters
       ]
     };
     
     // Get patterns for language (default to javascript patterns)
-    const langPatterns = patterns[language] || patterns.javascript;
+    const lang = resolveLanguage(language);
+    const langPatterns = patterns[lang] || patterns.javascript;
     
     // Extract all variable names
     langPatterns.forEach(pattern => {
@@ -51,7 +72,7 @@ export function normalizeVariableNames(code, language) {
       while ((match = regex.exec(code)) !== null) {
         const varName = match[1];
         // Skip common keywords and built-ins
-        if (!isCommonKeyword(varName, language) && !variableMap.has(varName)) {
+        if (!isCommonKeyword(varName, lang) && !variableMap.has(varName)) {
           variableMap.set(varName, `var${varCounter++}`);
         }
       }
@@ -86,8 +107,8 @@ function isCommonKeyword(name, language) {
   const keywords = {
     python: ['def', 'class', 'if', 'else', 'elif', 'for', 'while', 'return', 'import', 'from', 'True', 'False', 'None', 'print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set'],
     javascript: ['function', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'return', 'import', 'export', 'class', 'true', 'false', 'null', 'undefined', 'console', 'log'],
-    java: ['public', 'private', 'protected', 'class', 'interface', 'void', 'static', 'final', 'return', 'if', 'else', 'for', 'while', 'true', 'false', 'null', 'System', 'out', 'println'],
-    cpp: ['int', 'void', 'char', 'bool', 'class', 'public', 'private', 'return', 'if', 'else', 'for', 'while', 'true', 'false', 'nullptr', 'std', 'cout', 'cin']
+    java: ['public', 'private', 'protected', 'class', 'interface', 'void', 'static', 'final', 'return', 'if', 'else', 'for', 'while', 'true', 'false', 'null', 'System', 'out', 'println', 'new', 'this', 'super', 'extends', 'implements', 'try', 'catch', 'throw', 'throws'],
+    cpp: ['class', 'public', 'private', 'return', 'if', 'else', 'for', 'while', 'true', 'false', 'nullptr', 'std', 'cout', 'cin', 'include', 'using', 'namespace', 'struct', 'template', 'typename']
   };
   
   const langKeywords = keywords[language] || keywords.javascript;
@@ -103,6 +124,7 @@ function isCommonKeyword(name, language) {
  */
 export function normalizeCode(code, language = 'javascript') {
   try {
+    const lang = resolveLanguage(language);
     let normalized = code;
     
     // 1. Normalize whitespace
@@ -113,15 +135,15 @@ export function normalizeCode(code, language = 'javascript') {
     // 2. Remove excessive blank lines
     normalized = normalized.replace(/\n{3,}/g, '\n\n');
     
-    // 3. Normalize variable names (most important for variable renaming detection)
-    normalized = normalizeVariableNames(normalized, language);
+    // 3. Remove comments BEFORE variable normalization (avoids capturing tokens from comments)
+    normalized = removeComments(normalized, lang);
     
-    // 4. Remove comments (they don't affect logic)
-    normalized = removeComments(normalized, language);
-    
-    // 5. Normalize string literals (content doesn't affect logic structure)
+    // 4. Normalize string literals BEFORE variable normalization (avoids capturing from inside strings)
     normalized = normalized.replace(/"[^"]*"/g, '"STRING"');
     normalized = normalized.replace(/'[^']*'/g, "'STRING'");
+    
+    // 5. Normalize variable names (runs last so comments/strings don't pollute the variable map)
+    normalized = normalizeVariableNames(normalized, lang);
     
     return normalized;
   } catch (error) {
@@ -232,11 +254,18 @@ export function analyzeStructure(code, language = 'javascript') {
     classes: 0
   };
   
-  if (language === 'python') {
+  const lang = resolveLanguage(language);
+  if (lang === 'python') {
     stats.functions = (code.match(/\bdef\s+\w+\s*\(/g) || []).length;
     stats.classes = (code.match(/\bclass\s+\w+/g) || []).length;
+  } else if (lang === 'java') {
+    stats.functions = (code.match(/\b(?:public|private|protected|static|final|abstract|synchronized)\s+[\w<>\[\]\s,?]+\s+\w+\s*\(/g) || []).length;
+    stats.classes = (code.match(/\bclass\s+\w+/g) || []).length;
+  } else if (lang === 'cpp' || lang === 'c') {
+    stats.functions = (code.match(/(?:^|\n)\s*(?:[\w:*&<>\[\]\s]+\s+)+\w+\s*\([^)]*\)\s*\{/g) || []).length;
+    stats.classes = (code.match(/\bclass\s+\w+/g) || []).length;
   } else {
-    stats.functions = (code.match(/\bfunction\s+\w+\s*\(|\w+\s*:\s*function\s*\(|\w+\s*=\s*function\s*\(/g) || []).length;
+    stats.functions = (code.match(/\bfunction\s+\w+\s*\(|\w+\s*:\s*function\s*\(|\w+\s*=\s*function\s*\(|=>\s*{/g) || []).length;
     stats.classes = (code.match(/\bclass\s+\w+/g) || []).length;
   }
   

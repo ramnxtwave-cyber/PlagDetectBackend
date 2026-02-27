@@ -107,8 +107,10 @@ export async function generateEmbedding(text, customApiKey = null) {
   
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      // Normalize text: remove excessive whitespace and normalize line endings
-      const normalizedText = text.trim().replace(/\s+/g, ' ');
+      // Preserve code structure: only trim leading/trailing whitespace.
+      // Collapsing all whitespace with /\s+/ → ' ' destroys indentation and
+      // line breaks that carry structural meaning in code.
+      const normalizedText = text.trim();
       
       if (!normalizedText) {
         throw new Error('Cannot generate embedding for empty text');
@@ -174,10 +176,9 @@ export async function generateEmbeddingsBatch(texts, customApiKey = null) {
       return [];
     }
     
-    // Normalize texts
-    const normalizedTexts = validTexts.map(text => 
-      text.trim().replace(/\s+/g, ' ')
-    );
+    // Preserve structure: trim only (no whitespace collapse).
+    // Collapsing /\s+/ → ' ' destroys indentation in code chunks.
+    const normalizedTexts = validTexts.map(text => text.trim());
     
     console.log(`[Embeddings] Generating ${normalizedTexts.length} embeddings in batch`);
     
@@ -229,25 +230,18 @@ export async function generateCodeEmbedding(code, language = 'javascript', custo
   let contextualizedCode;
   
   if (useNormalization) {
-    // Normalize code to reduce impact of variable names
+    // Use only the normalized code with a minimal language prefix.
+    // Previously this included normalized + structural signature + original all in one
+    // string, which caused artificially high cosine similarities because:
+    //   1. All submissions share the same boilerplate tokens
+    //   2. Variable normalization (var0, var1...) makes any two programs look alike
+    //   3. The redundant triple representation wastes the model's context budget
     const normalizedCode = codeNormalizer.normalizeCode(code, language);
-    const semanticSig = codeNormalizer.createSemanticSignature(code, language);
-    
-    // Create enhanced context that includes:
-    // 1. Language context
-    // 2. Normalized code (generic variable names)
-    // 3. Semantic signature (structural pattern)
-    // 4. Original code (for exact matches)
-    contextualizedCode = `${language} code:
-Normalized: ${normalizedCode}
-Structure: ${semanticSig}
-Original: ${code}`;
-    
-    console.log(`[Embeddings] Using enhanced normalization for ${language} code`);
+    contextualizedCode = `${language}:\n${normalizedCode}`;
+    console.log(`[Embeddings] Using normalized code for ${language}`);
   } else {
-    // Use original code only (no normalization)
-    contextualizedCode = `${language} code:\n${code}`;
-    console.log(`[Embeddings] Using original code (normalization disabled) for ${language} code`);
+    contextualizedCode = `${language}:\n${code}`;
+    console.log(`[Embeddings] Using original code (normalization disabled) for ${language}`);
   }
   
   return generateEmbedding(contextualizedCode, customApiKey);
@@ -271,14 +265,14 @@ export async function generateChunkEmbeddings(chunks, language = 'javascript', c
   let contextualizedTexts;
   
   if (useNormalization) {
-    // Add context and normalization to each chunk
+    // Use only the normalized chunk — same reasoning as generateCodeEmbedding:
+    // including both normalized + original inflates similarity via shared tokens.
     contextualizedTexts = chunks.map(chunk => {
       const normalizedChunk = codeNormalizer.normalizeCode(chunk.text, language);
-      return `${language} code:\nNormalized: ${normalizedChunk}\nOriginal: ${chunk.text}`;
+      return `${language}:\n${normalizedChunk}`;
     });
   } else {
-    // Use original text only
-    contextualizedTexts = chunks.map(chunk => `${language} code:\n${chunk.text}`);
+    contextualizedTexts = chunks.map(chunk => `${language}:\n${chunk.text}`);
   }
   
   // Generate embeddings in batch for efficiency

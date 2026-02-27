@@ -14,6 +14,29 @@ let pinecone = null;
 let index = null;
 
 /**
+ * Calibrate raw Pinecone cosine similarity to a meaningful plagiarism percentage.
+ *
+ * OpenAI's text-embedding-3-small has a natural cosine-similarity floor of ~0.70
+ * for completely unrelated texts — returning a raw score of 0.70–0.80 even when two
+ * code snippets share zero logic. Treating that raw score as a "70–80% similarity"
+ * is the root cause of the false-positive inflation.
+ *
+ * Calibration remaps the range [BASELINE, 1.0] → [0, 1]:
+ *   calibrated = max(0, (raw - BASELINE) / (1 - BASELINE))
+ *
+ * With BASELINE = 0.70:
+ *   raw 0.70 (completely unrelated) → 0 %
+ *   raw 0.85 (structurally similar) → 50 %
+ *   raw 0.95 (near-identical)       → 83 %
+ *   raw 1.00 (exact copy)           → 100 %
+ */
+const COSINE_SIMILARITY_BASELINE = 0.70;
+
+function calibrateScore(rawScore) {
+  return Math.max(0, (rawScore - COSINE_SIMILARITY_BASELINE) / (1 - COSINE_SIMILARITY_BASELINE));
+}
+
+/**
  * Get or create Pinecone client (lazy initialization)
  */
 function getPineconeClient() {
@@ -132,8 +155,9 @@ export async function findSimilarSubmissions(embedding, questionId, limit = 5, m
       includeMetadata: true
     });
     
-    // Return ALL results above minSimilarity (even if low)
-    // Scoring engine will handle the actual threshold filtering
+    // Filter by raw score first (keeps cast wide), then calibrate before returning.
+    // The calibration remaps the OpenAI embedding baseline (~0.70 for unrelated code)
+    // to 0 % so the final similarity value is an honest plagiarism percentage.
     const results = queryResponse.matches
       .filter(match => match.score >= minSimilarity)
       .slice(0, limit)
@@ -142,12 +166,13 @@ export async function findSimilarSubmissions(embedding, questionId, limit = 5, m
         student_id: match.metadata.studentId,
         question_id: match.metadata.questionId,
         code: match.metadata.code,
-        similarity: match.score
+        similarity: calibrateScore(match.score),
+        rawSimilarity: match.score
       }));
     
-    console.log(`[Pinecone] Found ${results.length} submissions (threshold: ${minSimilarity})`);
+    console.log(`[Pinecone] Found ${results.length} submissions (raw threshold: ${minSimilarity})`);
     if (results.length > 0) {
-      console.log(`[Pinecone] Top similarity: ${(results[0].similarity * 100).toFixed(1)}%`);
+      console.log(`[Pinecone] Top similarity (calibrated): ${(results[0].similarity * 100).toFixed(1)}% (raw: ${(results[0].rawSimilarity * 100).toFixed(1)}%)`);
     }
     return results;
   } catch (error) {
@@ -188,7 +213,8 @@ export async function findSimilarChunks(embedding, questionId, limit = 10, minSi
         question_id: match.metadata.questionId,
         chunk_index: match.metadata.chunkIndex,
         chunk_text: match.metadata.chunkText,
-        similarity: match.score
+        similarity: calibrateScore(match.score),
+        rawSimilarity: match.score
       }));
     
     console.log(`[Pinecone] Found ${results.length} similar chunks`);

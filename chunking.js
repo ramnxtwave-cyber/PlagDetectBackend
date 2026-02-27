@@ -123,6 +123,151 @@ export function filterTrivialChunks(chunks, minLines = 3, minChars = 50) {
 }
 
 /**
+ * Extract functions/methods from brace-delimited code (Java, C, C++).
+ * Uses language-specific patterns to detect method/function starts, then
+ * tracks brace depth to find the end of each block.
+ * @param {string} code - Source code
+ * @param {Array<RegExp>} patterns - Regex patterns that match a line and capture group 1 = name
+ * @returns {Array<Object>} Array of {index, text, type, name} chunks
+ */
+export function extractBraceBasedFunctions(code, patterns) {
+  const chunks = [];
+  const lines = code.split('\n');
+  let currentChunk = null;
+  let braceDepth = 0;
+  let chunkIndex = 0;
+
+  const isCommentLine = (trimmed) =>
+    trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!currentChunk) {
+      if (trimmed === '' || isCommentLine(trimmed)) continue;
+
+      for (const pattern of patterns) {
+        const match = line.match(pattern);
+        if (match) {
+          currentChunk = {
+            index: chunkIndex++,
+            startLine: i,
+            name: match[1] || 'anonymous',
+            type: 'function',
+            lines: [line],
+          };
+          braceDepth = (line.match(/{/g) || []).length - (line.match(/}/g) || []).length;
+          break;
+        }
+      }
+    } else {
+      currentChunk.lines.push(line);
+      braceDepth += (line.match(/{/g) || []).length;
+      braceDepth -= (line.match(/}/g) || []).length;
+
+      if (braceDepth <= 0) {
+        currentChunk.text = currentChunk.lines.join('\n');
+        currentChunk.endLine = i;
+        delete currentChunk.lines;
+        chunks.push(currentChunk);
+        currentChunk = null;
+        braceDepth = 0;
+      }
+    }
+  }
+
+  if (currentChunk) {
+    currentChunk.text = currentChunk.lines.join('\n');
+    currentChunk.endLine = lines.length - 1;
+    delete currentChunk.lines;
+    chunks.push(currentChunk);
+  }
+
+  return chunks;
+}
+
+/**
+ * Extract top-level functions and classes from Python code using indentation.
+ * Detects `def` and `class` at the module level (indent=0), collects all lines
+ * that belong to them, and stops when a new top-level statement begins.
+ * @param {string} code - Python source code
+ * @returns {Array<Object>} Array of {index, text, type, name} chunks
+ */
+export function extractPythonFunctions(code) {
+  const chunks = [];
+  const lines = code.split('\n');
+  let currentChunk = null;
+  let chunkIndex = 0;
+
+  const flushChunk = (upToLine) => {
+    if (!currentChunk) return;
+    currentChunk.text = currentChunk.lines.join('\n').trimEnd();
+    currentChunk.endLine = upToLine;
+    delete currentChunk.lines;
+    chunks.push(currentChunk);
+    currentChunk = null;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Determine indentation level of this non-empty line
+    const indent = trimmed.length > 0 ? line.length - line.trimStart().length : null;
+
+    // A top-level def/class starts a new chunk (indent === 0)
+    const topLevelDef = indent === 0 && /^(def|class)\s+(\w+)/.exec(trimmed);
+
+    if (topLevelDef) {
+      // Flush previous chunk if any
+      flushChunk(i - 1);
+      currentChunk = {
+        index: chunkIndex++,
+        startLine: i,
+        name: topLevelDef[2],
+        type: topLevelDef[1] === 'class' ? 'class' : 'function',
+        lines: [line],
+      };
+    } else if (currentChunk) {
+      // Any non-empty line at indent 0 that isn't a def/class ends the current chunk
+      if (indent === 0 && trimmed.length > 0 && !trimmed.startsWith('#')) {
+        flushChunk(i - 1);
+        // Don't lose this line — it belongs to the module-level scope (not chunked)
+      } else {
+        currentChunk.lines.push(line);
+      }
+    }
+  }
+  flushChunk(lines.length - 1);
+
+  return chunks;
+}
+
+/** Normalize language aliases to canonical names */
+function resolveLanguage(lang) {
+  const aliases = {
+    js: 'javascript',
+    ts: 'javascript',
+    typescript: 'javascript',
+    py: 'python',
+    'c++': 'cpp',
+    cc: 'cpp',
+  };
+  return aliases[lang?.toLowerCase?.()] || lang;
+}
+
+/** Java method-start patterns (modifiers + return type + name + () */
+const JAVA_METHOD_PATTERNS = [
+  /^\s*(?:(?:public|private|protected|static|final|abstract|synchronized)\s+)*[\w<>\[\]\s,?]+\s+(\w+)\s*\(/,
+];
+
+/** C/C++ function-start patterns (return type + name + () */
+const C_CPP_METHOD_PATTERNS = [
+  /^\s*(?:[\w:*&<>\[\]\s]+\s+)+(\w+)\s*\([^)]*\)\s*\{?/,
+];
+
+/**
  * Extract code chunks with intelligent splitting
  * @param {string} code - Code text
  * @param {string} language - Programming language
@@ -132,14 +277,28 @@ export function extractCodeChunks(code, language = 'javascript') {
   if (!code || code.trim().length === 0) {
     return [];
   }
-  
+
+  const lang = resolveLanguage(language);
   let chunks = [];
-  
-  if (language === 'javascript' || language === 'js') {
+
+  if (lang === 'javascript') {
     chunks = extractJavaScriptFunctions(code);
+  } else if (lang === 'python') {
+    chunks = extractPythonFunctions(code);
+    if (chunks.length === 0) {
+      chunks = [{ index: 0, text: code, type: 'whole', name: 'main' }];
+    }
+  } else if (lang === 'java') {
+    chunks = extractBraceBasedFunctions(code, JAVA_METHOD_PATTERNS);
+    if (chunks.length === 0) {
+      chunks = [{ index: 0, text: code, type: 'whole', name: 'main' }];
+    }
+  } else if (lang === 'cpp' || lang === 'c') {
+    chunks = extractBraceBasedFunctions(code, C_CPP_METHOD_PATTERNS);
+    if (chunks.length === 0) {
+      chunks = [{ index: 0, text: code, type: 'whole', name: 'main' }];
+    }
   } else {
-    // For unsupported languages, create a single chunk with the whole code
-    // In a production system, you'd add parsers for Python, Java, etc.
     chunks = [{
       index: 0,
       text: code,
@@ -216,6 +375,8 @@ export function getChunkStats(chunks) {
 export default {
   extractCodeChunks,
   extractJavaScriptFunctions,
+  extractPythonFunctions,
+  extractBraceBasedFunctions,
   filterTrivialChunks,
   slidingWindowChunks,
   getChunkStats,
