@@ -62,9 +62,10 @@ app.get("/api/health", (req, res) => {
  */
 app.post("/api/submit", async (req, res) => {
   try {
-    const { code, studentId, questionId, language = "javascript", useNormalization = true } = req.body;
+    const { code, studentId, questionId, examId, language = "javascript", useNormalization = true } = req.body;
     const normalizedStudentId = studentId?.trim?.();
     const normalizedQuestionId = questionId?.trim?.();
+    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
 
     // Get custom API key from header if provided
     const customApiKey = req.headers["x-openai-api-key"] || null;
@@ -123,6 +124,7 @@ app.post("/api/submit", async (req, res) => {
       submissionId,
       studentId: normalizedStudentId,
       questionId: normalizedQuestionId,
+      examId: normalizedExamId,
       code,
       embedding: wholeCodeEmbedding,
       chunks: chunksWithEmbeddings,
@@ -180,6 +182,85 @@ app.post("/api/submit", async (req, res) => {
 });
 
 /**
+ * POST /api/submit/bulk
+ * Bulk upload submissions from a sheet (exam_id, question_id, student_id, submission).
+ * Body: { submissions: [ { exam_id, question_id, student_id, submission, language? } ], useNormalization?: true }
+ */
+app.post("/api/submit/bulk", async (req, res) => {
+  try {
+    const { submissions: rows, useNormalization = true } = req.body;
+    const customApiKey = req.headers["x-openai-api-key"] || null;
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing or empty 'submissions' array. Each row must have: exam_id, question_id, student_id, submission",
+      });
+    }
+
+    const results = { success: 0, failed: 0, errors: [] };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const examId = (row.exam_id != null && String(row.exam_id).trim() !== '') ? String(row.exam_id).trim() : null;
+      const questionId = (row.question_id != null && String(row.question_id).trim()) ? String(row.question_id).trim() : '';
+      const studentId = (row.student_id != null && String(row.student_id).trim()) ? String(row.student_id).trim() : '';
+      const code = row.submission != null ? String(row.submission) : '';
+      const language = row.language && String(row.language).trim() ? String(row.language).trim() : 'javascript';
+
+      if (!questionId || !studentId || !code || code.trim().length < 10) {
+        results.failed++;
+        results.errors.push({ row: i + 1, error: "Missing or invalid exam_id/question_id/student_id/submission (code min 10 chars)" });
+        continue;
+      }
+
+      try {
+        const submissionId = `${studentId}_${questionId}_${Date.now()}_${i}`;
+        const wholeCodeEmbedding = await embeddings.generateCodeEmbedding(code, language, customApiKey, useNormalization);
+        const codeChunks = chunking.extractCodeChunks(code, language);
+        const chunksWithEmbeddings = codeChunks.length > 0
+          ? await embeddings.generateChunkEmbeddings(codeChunks, language, customApiKey, useNormalization)
+          : [];
+        await vectorDb.saveSubmission({
+          submissionId,
+          studentId,
+          questionId,
+          examId,
+          code,
+          embedding: wholeCodeEmbedding,
+          chunks: chunksWithEmbeddings,
+        });
+        results.success++;
+      } catch (err) {
+        results.failed++;
+        results.errors.push({ row: i + 1, error: err.message || "Processing failed" });
+      }
+    }
+
+    res.json({
+      success: true,
+      total: rows.length,
+      successCount: results.success,
+      failCount: results.failed,
+      errors: results.errors.slice(0, 50),
+      message: `Processed ${rows.length} rows: ${results.success} succeeded, ${results.failed} failed`,
+    });
+  } catch (error) {
+    console.error("[Bulk Submit Error]", error);
+    if (error.message && error.message.includes("Pinecone")) {
+      return res.status(503).json({ success: false, error: "Vector database not configured.", errorType: "PINECONE_NOT_CONFIGURED" });
+    }
+    if (error.message && error.message.includes("quota")) {
+      return res.status(402).json({ success: false, error: "OpenAI API quota exceeded.", errorType: "QUOTA_EXCEEDED" });
+    }
+    if (error.message && error.message.includes("API key")) {
+      return res.status(401).json({ success: false, error: "Invalid or missing OpenAI API key.", errorType: "INVALID_API_KEY" });
+    }
+    res.status(500).json({ success: false, error: error.message || "Internal server error" });
+  }
+});
+
+/**
  * POST /api/check
  * Check code for similarity with existing submissions
  *
@@ -205,12 +286,14 @@ app.post("/api/check", async (req, res) => {
     const {
       code,
       questionId,
+      examId,
       language = "javascript",
       similarityThreshold = 0.75,
       maxResults = 5,
       useNormalization = true,
     } = req.body;
     const normalizedQuestionId = questionId?.trim?.();
+    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
 
     // Get custom API key from header if provided
     const customApiKey = req.headers["x-openai-api-key"] || null;
@@ -235,16 +318,16 @@ app.post("/api/check", async (req, res) => {
       console.log(`[Check] Using custom API key`);
     }
 
-    // Check if submissions exist for this question
+    // Check if submissions exist for this question (and exam if provided)
     // Retry once after a short delay: Pinecone has eventual consistency, so a submission
     // that was just added may not be visible for 1–3 seconds.
-    console.log(`[Check] Verifying submissions exist for question ${normalizedQuestionId}...`);
-    let existingSubmissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId);
+    console.log(`[Check] Verifying submissions exist for question ${normalizedQuestionId}${normalizedExamId ? ` exam ${normalizedExamId}` : ''}...`);
+    let existingSubmissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId, normalizedExamId);
 
     if (!existingSubmissions || existingSubmissions.length === 0) {
       console.log(`[Check] No submissions on first try; retrying in 2.5s (Pinecone eventual consistency)...`);
       await new Promise((r) => setTimeout(r, 2500));
-      existingSubmissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId);
+      existingSubmissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId, normalizedExamId);
     }
 
     if (!existingSubmissions || existingSubmissions.length === 0) {
@@ -277,6 +360,7 @@ app.post("/api/check", async (req, res) => {
       normalizedQuestionId,
       50, // Get more results (filter later)
       searchThreshold,
+      normalizedExamId,
     );
     console.log(
       `[Check] Found ${similarSubmissions.length} submissions above ${searchThreshold} threshold`,
@@ -306,6 +390,7 @@ app.post("/api/check", async (req, res) => {
             normalizedQuestionId,
             10,
             searchThreshold, // Use same lower threshold
+            normalizedExamId,
           );
 
           return matches.map((match) => ({
@@ -620,12 +705,13 @@ app.post("/api/check", async (req, res) => {
 
 /**
  * GET /api/submissions/:questionId
- * Get all submissions for a question
+ * Get all submissions for a question (optional query: ?examId=...)
  */
 app.get("/api/submissions/:questionId", async (req, res) => {
   try {
     const normalizedQuestionId = req.params.questionId?.trim?.();
-    const submissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId);
+    const examId = (req.query.examId != null && String(req.query.examId).trim() !== '') ? String(req.query.examId).trim() : null;
+    const submissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId, examId);
 
     res.json({
       success: true,
@@ -649,19 +735,20 @@ app.get("/api/submissions/:questionId", async (req, res) => {
 
 /**
  * POST /api/reembed/:questionId
- * Re-generate embeddings for all submissions of a question
+ * Re-generate embeddings for all submissions of a question (optional body: examId)
  * Use this after updating embedding logic to refresh old submissions
  */
 app.post('/api/reembed/:questionId', async (req, res) => {
   try {
     const normalizedQuestionId = req.params.questionId?.trim?.();
-    const { useNormalization = true } = req.body;
+    const { useNormalization = true, examId } = req.body;
+    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
     const customApiKey = req.headers["x-openai-api-key"] || null;
     
-    console.log(`[Re-embed] Starting re-embedding for question ${normalizedQuestionId} (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
+    console.log(`[Re-embed] Starting re-embedding for question ${normalizedQuestionId}${normalizedExamId ? ` exam ${normalizedExamId}` : ''} (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
     
-    // Get all submissions for this question
-    const submissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId);
+    // Get all submissions for this question (and exam if provided)
+    const submissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId, normalizedExamId);
     
     if (!submissions || submissions.length === 0) {
       return res.status(404).json({
@@ -693,11 +780,13 @@ app.post('/api/reembed/:questionId', async (req, res) => {
           ? await embeddings.generateChunkEmbeddings(chunks, language, customApiKey, useNormalization)
           : [];
         
-        // Save updated embeddings
+        // Save updated embeddings (preserve examId from metadata if present)
+        const existingExamId = sub.exam_id ?? null;
         await vectorDb.saveSubmission({
           submissionId: sub.id,
           studentId: sub.student_id,
           questionId: sub.question_id,
+          examId: existingExamId,
           code: sub.code,
           embedding: newEmbedding,
           chunks: chunksWithEmbeddings

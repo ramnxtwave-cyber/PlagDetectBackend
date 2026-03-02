@@ -48,6 +48,7 @@ export async function checkExternalPlagiarism(
       tools: ["copydetect", "difflib", `treesitter_${lang}`],
     };
 
+    console.log("External API Payload:", payload);
     console.log(
       `[External API] Checking against ${pastSubmissions.length} submissions`,
     );
@@ -66,6 +67,7 @@ export async function checkExternalPlagiarism(
     console.log(
       `[External API] Tools run: ${response.data.comparisons?.length || 0}`,
     );
+    console.log("External API Response:", response.data);
     return response.data;
   } catch (error) {
     console.error("[External API Error]", error.message);

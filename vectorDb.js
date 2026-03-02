@@ -75,44 +75,53 @@ export async function initializeIndex() {
 
 /**
  * Save submission with embedding
- * @param {Object} data - { submissionId, studentId, questionId, code, embedding, chunks }
+ * @param {Object} data - { submissionId, studentId, questionId, examId (optional), code, embedding, chunks }
  */
 export async function saveSubmission(data) {
-  const { submissionId, studentId, questionId, code, embedding, chunks } = data;
-  
+  const { submissionId, studentId, questionId, examId, code, embedding, chunks } = data;
+  const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : '';
+
   try {
     if (!index) {
       throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
     }
-    
+
+    const baseMetadata = {
+      type: 'submission',
+      submissionId: submissionId,
+      studentId: studentId,
+      questionId: questionId,
+      code: code.substring(0, 1000), // Pinecone metadata limit
+      codeLength: code.length,
+      timestamp: Date.now()
+    };
+    if (normalizedExamId) baseMetadata.examId = normalizedExamId;
+
     const vectors = [];
-    
+
     // Store whole-submission vector
     vectors.push({
       id: `sub_${submissionId}`,
       values: embedding,
-      metadata: {
-        type: 'submission',
-        submissionId: submissionId,
-        studentId: studentId,
-        questionId: questionId,
-        code: code.substring(0, 1000), // Pinecone metadata limit
-        codeLength: code.length,
-        timestamp: Date.now()
-      }
+      metadata: { ...baseMetadata }
     });
-    
+
     // Store chunk vectors
+    const chunkBaseMeta = {
+      type: 'chunk',
+      submissionId: submissionId,
+      studentId: studentId,
+      questionId: questionId,
+    };
+    if (normalizedExamId) chunkBaseMeta.examId = normalizedExamId;
+
     if (chunks && chunks.length > 0) {
       chunks.forEach((chunk, idx) => {
         vectors.push({
           id: `sub_${submissionId}_chunk_${idx}`,
           values: chunk.embedding,
           metadata: {
-            type: 'chunk',
-            submissionId: submissionId,
-            studentId: studentId,
-            questionId: questionId,
+            ...chunkBaseMeta,
             chunkIndex: idx,
             chunkText: chunk.text.substring(0, 1000),
             timestamp: Date.now()
@@ -138,20 +147,25 @@ export async function saveSubmission(data) {
  * @param {string} questionId - Question to search within
  * @param {number} limit - Number of results
  * @param {number} minSimilarity - Minimum similarity threshold
+ * @param {string} [examId] - Optional exam ID to filter submissions (same exam only)
  */
-export async function findSimilarSubmissions(embedding, questionId, limit = 5, minSimilarity = 0.3) {
+export async function findSimilarSubmissions(embedding, questionId, limit = 5, minSimilarity = 0.3, examId = null) {
   try {
     if (!index) {
       throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
     }
-    
+
+    const filter = {
+      type: { $eq: 'submission' },
+      questionId: { $eq: questionId }
+    };
+    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
+    if (normalizedExamId) filter.examId = { $eq: normalizedExamId };
+
     const queryResponse = await index.query({
       vector: embedding,
       topK: 100, // Get more results
-      filter: {
-        type: { $eq: 'submission' },
-        questionId: { $eq: questionId }
-      },
+      filter,
       includeMetadata: true
     });
     
@@ -187,20 +201,25 @@ export async function findSimilarSubmissions(embedding, questionId, limit = 5, m
  * @param {string} questionId - Question to search within
  * @param {number} limit - Number of results
  * @param {number} minSimilarity - Minimum similarity threshold
+ * @param {string} [examId] - Optional exam ID to filter chunks (same exam only)
  */
-export async function findSimilarChunks(embedding, questionId, limit = 10, minSimilarity = 0.75) {
+export async function findSimilarChunks(embedding, questionId, limit = 10, minSimilarity = 0.75, examId = null) {
   try {
     if (!index) {
       throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
     }
-    
+
+    const filter = {
+      type: { $eq: 'chunk' },
+      questionId: { $eq: questionId }
+    };
+    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
+    if (normalizedExamId) filter.examId = { $eq: normalizedExamId };
+
     const queryResponse = await index.query({
       vector: embedding,
       topK: 100,
-      filter: {
-        type: { $eq: 'chunk' },
-        questionId: { $eq: questionId }
-      },
+      filter,
       includeMetadata: true
     });
     
@@ -227,8 +246,10 @@ export async function findSimilarChunks(embedding, questionId, limit = 10, minSi
 
 /**
  * Get all submissions for a question
+ * @param {string} questionId - Question ID
+ * @param {string} [examId] - Optional exam ID to filter (only submissions for this exam)
  */
-export async function getSubmissionsByQuestion(questionId) {
+export async function getSubmissionsByQuestion(questionId, examId = null) {
   try {
     if (!index) {
       throw new Error('Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.');
@@ -239,25 +260,29 @@ export async function getSubmissionsByQuestion(questionId) {
       throw new Error('Question ID is required');
     }
 
+    const filter = {
+      type: { $eq: 'submission' },
+      questionId: { $eq: normalizedQuestionId }
+    };
+    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
+    if (normalizedExamId) filter.examId = { $eq: normalizedExamId };
+
     // Pinecone query vectors cannot be all zeros. Use a tiny non-zero probe
-    // vector only to retrieve matches filtered by questionId.
     const probeVector = Array(1536).fill(0);
     probeVector[0] = 0.001;
-    
+
     const queryResponse = await index.query({
       vector: probeVector,
       topK: 1000,
-      filter: {
-        type: { $eq: 'submission' },
-        questionId: { $eq: normalizedQuestionId }
-      },
+      filter,
       includeMetadata: true
     });
-    
+
     return queryResponse.matches.map(match => ({
       id: match.metadata.submissionId,
       student_id: match.metadata.studentId,
       question_id: match.metadata.questionId,
+      exam_id: match.metadata.examId || null,
       code: match.metadata.code,
       created_at: new Date(match.metadata.timestamp)
     }));
