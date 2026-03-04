@@ -62,10 +62,20 @@ app.get("/api/health", (req, res) => {
  */
 app.post("/api/submit", async (req, res) => {
   try {
-    const { code, studentId, questionId, examId, language = "javascript", useNormalization = true } = req.body;
+    const {
+      code,
+      studentId,
+      questionId,
+      examId,
+      language = "javascript",
+      useNormalization = true,
+    } = req.body;
     const normalizedStudentId = studentId?.trim?.();
     const normalizedQuestionId = questionId?.trim?.();
-    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
+    const normalizedExamId =
+      examId != null && String(examId).trim() !== ""
+        ? String(examId).trim()
+        : null;
 
     // Get custom API key from header if provided
     const customApiKey = req.headers["x-openai-api-key"] || null;
@@ -103,7 +113,9 @@ app.post("/api/submit", async (req, res) => {
       customApiKey,
       useNormalization,
     );
-    console.log(`[Submit] Generated whole-code embedding (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
+    console.log(
+      `[Submit] Generated whole-code embedding (normalization: ${useNormalization ? "ON" : "OFF"})`,
+    );
 
     // Step 2: Extract and embed chunks
     const codeChunks = chunking.extractCodeChunks(code, language);
@@ -126,6 +138,7 @@ app.post("/api/submit", async (req, res) => {
       questionId: normalizedQuestionId,
       examId: normalizedExamId,
       code,
+      language,
       embedding: wholeCodeEmbedding,
       chunks: chunksWithEmbeddings,
     });
@@ -194,7 +207,8 @@ app.post("/api/submit/bulk", async (req, res) => {
     if (!Array.isArray(rows) || rows.length === 0) {
       return res.status(400).json({
         success: false,
-        error: "Missing or empty 'submissions' array. Each row must have: exam_id, question_id, student_id, submission",
+        error:
+          "Missing or empty 'submissions' array. Each row must have: exam_id, question_id, student_id, submission",
       });
     }
 
@@ -202,38 +216,69 @@ app.post("/api/submit/bulk", async (req, res) => {
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const examId = (row.exam_id != null && String(row.exam_id).trim() !== '') ? String(row.exam_id).trim() : null;
-      const questionId = (row.question_id != null && String(row.question_id).trim()) ? String(row.question_id).trim() : '';
-      const studentId = (row.student_id != null && String(row.student_id).trim()) ? String(row.student_id).trim() : '';
-      const code = row.submission != null ? String(row.submission) : '';
-      const language = row.language && String(row.language).trim() ? String(row.language).trim() : 'javascript';
+      const examId =
+        row.exam_id != null && String(row.exam_id).trim() !== ""
+          ? String(row.exam_id).trim()
+          : null;
+      const questionId =
+        row.question_id != null && String(row.question_id).trim()
+          ? String(row.question_id).trim()
+          : "";
+      const studentId =
+        row.student_id != null && String(row.student_id).trim()
+          ? String(row.student_id).trim()
+          : "";
+      const code = row.submission != null ? String(row.submission) : "";
+      const language =
+        row.language && String(row.language).trim()
+          ? String(row.language).trim()
+          : "javascript";
 
       if (!questionId || !studentId || !code || code.trim().length < 10) {
         results.failed++;
-        results.errors.push({ row: i + 1, error: "Missing or invalid exam_id/question_id/student_id/submission (code min 10 chars)" });
+        results.errors.push({
+          row: i + 1,
+          error:
+            "Missing or invalid exam_id/question_id/student_id/submission (code min 10 chars)",
+        });
         continue;
       }
 
       try {
         const submissionId = `${studentId}_${questionId}_${Date.now()}_${i}`;
-        const wholeCodeEmbedding = await embeddings.generateCodeEmbedding(code, language, customApiKey, useNormalization);
+        const wholeCodeEmbedding = await embeddings.generateCodeEmbedding(
+          code,
+          language,
+          customApiKey,
+          useNormalization,
+        );
         const codeChunks = chunking.extractCodeChunks(code, language);
-        const chunksWithEmbeddings = codeChunks.length > 0
-          ? await embeddings.generateChunkEmbeddings(codeChunks, language, customApiKey, useNormalization)
-          : [];
+        const chunksWithEmbeddings =
+          codeChunks.length > 0
+            ? await embeddings.generateChunkEmbeddings(
+                codeChunks,
+                language,
+                customApiKey,
+                useNormalization,
+              )
+            : [];
         await vectorDb.saveSubmission({
           submissionId,
           studentId,
           questionId,
           examId,
           code,
+          language,
           embedding: wholeCodeEmbedding,
           chunks: chunksWithEmbeddings,
         });
         results.success++;
       } catch (err) {
         results.failed++;
-        results.errors.push({ row: i + 1, error: err.message || "Processing failed" });
+        results.errors.push({
+          row: i + 1,
+          error: err.message || "Processing failed",
+        });
       }
     }
 
@@ -248,15 +293,30 @@ app.post("/api/submit/bulk", async (req, res) => {
   } catch (error) {
     console.error("[Bulk Submit Error]", error);
     if (error.message && error.message.includes("Pinecone")) {
-      return res.status(503).json({ success: false, error: "Vector database not configured.", errorType: "PINECONE_NOT_CONFIGURED" });
+      return res.status(503).json({
+        success: false,
+        error: "Vector database not configured.",
+        errorType: "PINECONE_NOT_CONFIGURED",
+      });
     }
     if (error.message && error.message.includes("quota")) {
-      return res.status(402).json({ success: false, error: "OpenAI API quota exceeded.", errorType: "QUOTA_EXCEEDED" });
+      return res.status(402).json({
+        success: false,
+        error: "OpenAI API quota exceeded.",
+        errorType: "QUOTA_EXCEEDED",
+      });
     }
     if (error.message && error.message.includes("API key")) {
-      return res.status(401).json({ success: false, error: "Invalid or missing OpenAI API key.", errorType: "INVALID_API_KEY" });
+      return res.status(401).json({
+        success: false,
+        error: "Invalid or missing OpenAI API key.",
+        errorType: "INVALID_API_KEY",
+      });
     }
-    res.status(500).json({ success: false, error: error.message || "Internal server error" });
+    res.status(500).json({
+      success: false,
+      error: error.message || "Internal server error",
+    });
   }
 });
 
@@ -291,9 +351,20 @@ app.post("/api/check", async (req, res) => {
       similarityThreshold = 0.75,
       maxResults = 5,
       useNormalization = true,
+      excludeStudentId = null, // Exclude this student's submissions before calculating plag %
+      languageFilter = null, // Filter to only this language before calculating plag %
     } = req.body;
     const normalizedQuestionId = questionId?.trim?.();
-    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
+    const normalizedExamId =
+      examId != null && String(examId).trim() !== ""
+        ? String(examId).trim()
+        : null;
+    const normalizedExcludeStudentId = excludeStudentId
+      ? String(excludeStudentId).trim()
+      : null;
+    const normalizedLanguageFilter = languageFilter
+      ? String(languageFilter).trim().toLowerCase()
+      : null;
 
     // Get custom API key from header if provided
     const customApiKey = req.headers["x-openai-api-key"] || null;
@@ -313,7 +384,9 @@ app.post("/api/check", async (req, res) => {
       });
     }
 
-    console.log(`[Check] Checking similarity for question ${normalizedQuestionId}`);
+    console.log(
+      `[Check] Checking similarity for question ${normalizedQuestionId}`,
+    );
     if (customApiKey) {
       console.log(`[Check] Using custom API key`);
     }
@@ -321,26 +394,76 @@ app.post("/api/check", async (req, res) => {
     // Check if submissions exist for this question (and exam if provided)
     // Retry once after a short delay: Pinecone has eventual consistency, so a submission
     // that was just added may not be visible for 1–3 seconds.
-    console.log(`[Check] Verifying submissions exist for question ${normalizedQuestionId}${normalizedExamId ? ` exam ${normalizedExamId}` : ''}...`);
-    let existingSubmissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId, normalizedExamId);
+    console.log(
+      `[Check] Verifying submissions exist for question ${normalizedQuestionId}${normalizedExamId ? ` exam ${normalizedExamId}` : ""}...`,
+    );
+    let existingSubmissions = await vectorDb.getSubmissionsByQuestion(
+      normalizedQuestionId,
+      normalizedExamId,
+    );
 
     if (!existingSubmissions || existingSubmissions.length === 0) {
-      console.log(`[Check] No submissions on first try; retrying in 2.5s (Pinecone eventual consistency)...`);
+      console.log(
+        `[Check] No submissions on first try; retrying in 2.5s (Pinecone eventual consistency)...`,
+      );
       await new Promise((r) => setTimeout(r, 2500));
-      existingSubmissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId, normalizedExamId);
+      existingSubmissions = await vectorDb.getSubmissionsByQuestion(
+        normalizedQuestionId,
+        normalizedExamId,
+      );
     }
 
     if (!existingSubmissions || existingSubmissions.length === 0) {
-      console.log(`[Check] No submissions found for question ${normalizedQuestionId}`);
+      console.log(
+        `[Check] No submissions found for question ${normalizedQuestionId}`,
+      );
       return res.status(404).json({
         success: false,
         error: `No submissions found for question "${normalizedQuestionId}". Please submit code for this question first before checking for similarity.`,
-        errorType: 'NO_SUBMISSIONS',
-        questionId: normalizedQuestionId
+        errorType: "NO_SUBMISSIONS",
+        questionId: normalizedQuestionId,
       });
     }
 
-    console.log(`[Check] Found ${existingSubmissions.length} existing submissions for question ${normalizedQuestionId}`);
+    console.log(
+      `[Check] Found ${existingSubmissions.length} existing submissions for question ${normalizedQuestionId}`,
+    );
+
+    // --- Pre-calculation filtering ---
+    // 1. Exclude the selected student's own submission (before any % is calculated)
+    if (normalizedExcludeStudentId) {
+      const beforeCount = existingSubmissions.length;
+      existingSubmissions = existingSubmissions.filter(
+        (s) =>
+          (s.student_id || "").trim().toLowerCase() !==
+          normalizedExcludeStudentId.toLowerCase(),
+      );
+      console.log(
+        `[Check] Excluded student "${normalizedExcludeStudentId}": ${beforeCount} → ${existingSubmissions.length} submissions`,
+      );
+    }
+
+    // 2. Filter to same language only (before any % is calculated)
+    if (normalizedLanguageFilter) {
+      const beforeCount = existingSubmissions.length;
+      existingSubmissions = existingSubmissions.filter(
+        (s) =>
+          !s.language ||
+          s.language.trim().toLowerCase() === normalizedLanguageFilter,
+      );
+      console.log(
+        `[Check] Language filter "${normalizedLanguageFilter}": ${beforeCount} → ${existingSubmissions.length} submissions`,
+      );
+    }
+
+    if (existingSubmissions.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: `No submissions found after filtering (excludeStudentId: ${normalizedExcludeStudentId || "none"}, languageFilter: ${normalizedLanguageFilter || "none"}).`,
+        errorType: "NO_SUBMISSIONS_AFTER_FILTER",
+        questionId: normalizedQuestionId,
+      });
+    }
 
     // Step 1: Generate embedding for the submitted code (with custom API key if provided)
     const codeEmbedding = await embeddings.generateCodeEmbedding(
@@ -349,13 +472,15 @@ app.post("/api/check", async (req, res) => {
       customApiKey,
       useNormalization,
     );
-    console.log(`[Check] Generated embedding for submission (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
+    console.log(
+      `[Check] Generated embedding for submission (normalization: ${useNormalization ? "ON" : "OFF"})`,
+    );
 
     // Step 2: Find similar whole submissions
     // Use LOWER threshold (0.3) to catch more matches, let scoring engine filter later
     // This prevents missing matches due to embedding strategy mismatches
     const searchThreshold = Math.min(0.3, similarityThreshold);
-    const similarSubmissions = await vectorDb.findSimilarSubmissions(
+    let similarSubmissions = await vectorDb.findSimilarSubmissions(
       codeEmbedding,
       normalizedQuestionId,
       50, // Get more results (filter later)
@@ -365,6 +490,29 @@ app.post("/api/check", async (req, res) => {
     console.log(
       `[Check] Found ${similarSubmissions.length} submissions above ${searchThreshold} threshold`,
     );
+
+    // Apply the same pre-filters to vector search results so plag % is calculated only against the allowed pool
+    if (normalizedExcludeStudentId) {
+      similarSubmissions = similarSubmissions.filter(
+        (s) =>
+          (s.student_id || "").trim().toLowerCase() !==
+          normalizedExcludeStudentId.toLowerCase(),
+      );
+      console.log(
+        `[Check] After excludeStudentId filter: ${similarSubmissions.length} similar submissions`,
+      );
+    }
+
+    if (normalizedLanguageFilter) {
+      similarSubmissions = similarSubmissions.filter(
+        (s) =>
+          !s.language ||
+          s.language.trim().toLowerCase() === normalizedLanguageFilter,
+      );
+      console.log(
+        `[Check] After languageFilter "${normalizedLanguageFilter}": ${similarSubmissions.length} similar submissions`,
+      );
+    }
 
     // Step 3: Extract and check chunks
     const codeChunks = chunking.extractCodeChunks(code, language);
@@ -404,13 +552,36 @@ app.post("/api/check", async (req, res) => {
       const chunkResults = await Promise.all(chunkSimilarityPromises);
       similarChunks = chunkResults.flat();
 
+      // Apply the same filters to chunks too
+      if (normalizedExcludeStudentId) {
+        similarChunks = similarChunks.filter(
+          (c) =>
+            (c.student_id || "").trim().toLowerCase() !==
+            normalizedExcludeStudentId.toLowerCase(),
+        );
+        console.log(
+          `[Check] After excludeStudentId filter: ${similarChunks.length} similar chunks`,
+        );
+      }
+
+      if (normalizedLanguageFilter) {
+        similarChunks = similarChunks.filter(
+          (c) =>
+            !c.language ||
+            c.language.trim().toLowerCase() === normalizedLanguageFilter,
+        );
+        console.log(
+          `[Check] After languageFilter "${normalizedLanguageFilter}": ${similarChunks.length} similar chunks`,
+        );
+      }
+
       similarChunks.sort((a, b) => b.similarity - a.similarity);
       console.log(`[Check] Found ${similarChunks.length} similar chunks`);
     }
 
     // Step 4: Build response with summary
     const uniqueMatchedSubmissions = new Set([
-      ...similarSubmissions.map((s) => s.id),
+      ...similarSubmissions.map((s) => s.submission_id),
       ...similarChunks.map((c) => c.submission_id),
     ]);
 
@@ -433,7 +604,7 @@ app.post("/api/check", async (req, res) => {
 
     // Format response (include full code for diff)
     const formatSubmission = (sub) => ({
-      submissionId: sub.id,
+      submissionId: sub.submission_id,
       studentId: sub.student_id,
       similarity: Math.round(sub.similarity * 1000) / 1000,
       code: sub.code, // Full code for diff
@@ -465,9 +636,9 @@ app.post("/api/check", async (req, res) => {
 
     try {
       // Use existingSubmissions we already fetched and validated
-      const submissionsForExternal = existingSubmissions.map(sub => ({
+      const submissionsForExternal = existingSubmissions.map((sub) => ({
         studentId: sub.student_id || sub.id,
-        code: sub.code
+        code: sub.code,
       }));
 
       console.log(
@@ -484,25 +655,30 @@ app.post("/api/check", async (req, res) => {
           },
           submissionsForExternal,
           language,
+          maxResults,
         );
 
       // Pass submissions to formatExternalResult so it can include full code
-      externalResult =
-        externalPlagiarism.formatExternalResult(externalApiResponse, submissionsForExternal);
+      externalResult = externalPlagiarism.formatExternalResult(
+        externalApiResponse,
+        submissionsForExternal,
+      );
 
       // Prepare local result for scoring engine (with maxSimilarity)
       const localResultForScoring = {
         hasMatches: similarSubmissions.length > 0,
-        maxSimilarity: similarSubmissions.length > 0 ? similarSubmissions[0].similarity : 0,
+        maxSimilarity:
+          similarSubmissions.length > 0 ? similarSubmissions[0].similarity : 0,
         matchCount: similarSubmissions.length,
-        submissions: similarSubmissions
+        submissions: similarSubmissions,
       };
 
       // Prepare structural data for penalty calculation
       const structuralData = {
         currentCode: code,
-        comparedCode: similarSubmissions.length > 0 ? similarSubmissions[0].code : '',
-        language: language
+        comparedCode:
+          similarSubmissions.length > 0 ? similarSubmissions[0].code : "",
+        language: language,
       };
 
       // Determine final decision using new scoring engine with structural penalty
@@ -527,27 +703,31 @@ app.post("/api/check", async (req, res) => {
       // Fallback decision when external API fails (still use scoring engine)
       const localResultForScoring = {
         hasMatches: similarSubmissions.length > 0,
-        maxSimilarity: similarSubmissions.length > 0 ? similarSubmissions[0].similarity : 0,
+        maxSimilarity:
+          similarSubmissions.length > 0 ? similarSubmissions[0].similarity : 0,
         matchCount: similarSubmissions.length,
-        submissions: similarSubmissions
+        submissions: similarSubmissions,
       };
-      
+
       // Prepare structural data for penalty calculation
       const structuralData = {
         currentCode: code,
-        comparedCode: similarSubmissions.length > 0 ? similarSubmissions[0].code : '',
-        language: language
+        comparedCode:
+          similarSubmissions.length > 0 ? similarSubmissions[0].code : "",
+        language: language,
       };
-      
+
       finalDecision = externalPlagiarism.determineFinalDecision(
         localResultForScoring,
         { available: false, comparisons: [] }, // Empty external result
         similarityThreshold,
         structuralData,
       );
-      
+
       // Add note about external API failure
-      finalDecision.reasoning.push('Note: External API verification unavailable');
+      finalDecision.reasoning.push(
+        "Note: External API verification unavailable",
+      );
     }
 
     // Calculate individual verdicts for each detection method
@@ -710,8 +890,14 @@ app.post("/api/check", async (req, res) => {
 app.get("/api/submissions/:questionId", async (req, res) => {
   try {
     const normalizedQuestionId = req.params.questionId?.trim?.();
-    const examId = (req.query.examId != null && String(req.query.examId).trim() !== '') ? String(req.query.examId).trim() : null;
-    const submissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId, examId);
+    const examId =
+      req.query.examId != null && String(req.query.examId).trim() !== ""
+        ? String(req.query.examId).trim()
+        : null;
+    const submissions = await vectorDb.getSubmissionsByQuestion(
+      normalizedQuestionId,
+      examId,
+    );
 
     res.json({
       success: true,
@@ -720,6 +906,7 @@ app.get("/api/submissions/:questionId", async (req, res) => {
       submissions: submissions.map((s) => ({
         id: s.id,
         studentId: s.student_id,
+        language: s.language || null,
         codeLength: s.code.length,
         createdAt: s.created_at,
       })),
@@ -738,79 +925,99 @@ app.get("/api/submissions/:questionId", async (req, res) => {
  * Re-generate embeddings for all submissions of a question (optional body: examId)
  * Use this after updating embedding logic to refresh old submissions
  */
-app.post('/api/reembed/:questionId', async (req, res) => {
+app.post("/api/reembed/:questionId", async (req, res) => {
   try {
     const normalizedQuestionId = req.params.questionId?.trim?.();
     const { useNormalization = true, examId } = req.body;
-    const normalizedExamId = (examId != null && String(examId).trim() !== '') ? String(examId).trim() : null;
+    const normalizedExamId =
+      examId != null && String(examId).trim() !== ""
+        ? String(examId).trim()
+        : null;
     const customApiKey = req.headers["x-openai-api-key"] || null;
-    
-    console.log(`[Re-embed] Starting re-embedding for question ${normalizedQuestionId}${normalizedExamId ? ` exam ${normalizedExamId}` : ''} (normalization: ${useNormalization ? 'ON' : 'OFF'})`);
-    
+
+    console.log(
+      `[Re-embed] Starting re-embedding for question ${normalizedQuestionId}${normalizedExamId ? ` exam ${normalizedExamId}` : ""} (normalization: ${useNormalization ? "ON" : "OFF"})`,
+    );
+
     // Get all submissions for this question (and exam if provided)
-    const submissions = await vectorDb.getSubmissionsByQuestion(normalizedQuestionId, normalizedExamId);
-    
+    const submissions = await vectorDb.getSubmissionsByQuestion(
+      normalizedQuestionId,
+      normalizedExamId,
+    );
+
     if (!submissions || submissions.length === 0) {
       return res.status(404).json({
         success: false,
         error: `No submissions found for question "${normalizedQuestionId}"`,
       });
     }
-    
+
     console.log(`[Re-embed] Re-embedding ${submissions.length} submissions...`);
     let successCount = 0;
     let failCount = 0;
-    
+
     for (const sub of submissions) {
       try {
         // Detect language from code if not stored
-        const language = 'python'; // Default, improve later
-        
+        const language = "python"; // Default, improve later
+
         // Re-generate embedding with current normalization setting
         const newEmbedding = await embeddings.generateCodeEmbedding(
           sub.code,
           language,
           customApiKey,
-          useNormalization
+          useNormalization,
         );
-        
+
         // Re-generate chunk embeddings
         const chunks = chunking.extractCodeChunks(sub.code, language);
-        const chunksWithEmbeddings = chunks.length > 0
-          ? await embeddings.generateChunkEmbeddings(chunks, language, customApiKey, useNormalization)
-          : [];
-        
-        // Save updated embeddings (preserve examId from metadata if present)
+        const chunksWithEmbeddings =
+          chunks.length > 0
+            ? await embeddings.generateChunkEmbeddings(
+                chunks,
+                language,
+                customApiKey,
+                useNormalization,
+              )
+            : [];
+
+        // Save updated embeddings (preserve examId and language from metadata if present)
         const existingExamId = sub.exam_id ?? null;
+        const existingLanguage = sub.language ?? null;
         await vectorDb.saveSubmission({
           submissionId: sub.id,
           studentId: sub.student_id,
           questionId: sub.question_id,
           examId: existingExamId,
+          language: existingLanguage,
           code: sub.code,
           embedding: newEmbedding,
-          chunks: chunksWithEmbeddings
+          chunks: chunksWithEmbeddings,
         });
-        
+
         successCount++;
-        console.log(`[Re-embed] ✓ Re-embedded ${sub.id} (${successCount}/${submissions.length})`);
+        console.log(
+          `[Re-embed] ✓ Re-embedded ${sub.id} (${successCount}/${submissions.length})`,
+        );
       } catch (error) {
         failCount++;
-        console.error(`[Re-embed] ✗ Failed to re-embed ${sub.id}:`, error.message);
+        console.error(
+          `[Re-embed] ✗ Failed to re-embed ${sub.id}:`,
+          error.message,
+        );
       }
     }
-    
+
     res.json({
       success: true,
       questionId: normalizedQuestionId,
       totalSubmissions: submissions.length,
       successCount,
       failCount,
-      message: `Successfully re-embedded ${successCount} out of ${submissions.length} submissions`
+      message: `Successfully re-embedded ${successCount} out of ${submissions.length} submissions`,
     });
-    
   } catch (error) {
-    console.error('[Re-embed Error]', error);
+    console.error("[Re-embed Error]", error);
     res.status(500).json({
       success: false,
       error: error.message,

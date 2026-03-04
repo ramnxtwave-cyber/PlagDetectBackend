@@ -13,7 +13,7 @@ dotenv.config();
 // External API configuration
 const EXTERNAL_API_URL =
   process.env.EXTERNAL_PLAGIAGARISM_API_URL ||
-  "https://pd-uaj3.onrender.com/api/detect";
+  "https://pd-production-b265.up.railway.app/api/detect";
 const EXTERNAL_API_TIMEOUT = 30000;
 
 /**
@@ -29,6 +29,7 @@ export async function checkExternalPlagiarism(
   currentSubmission,
   pastSubmissions,
   language = "python",
+  maxResults,
 ) {
   try {
     console.log("[External API] Calling external plagiarism check...");
@@ -36,6 +37,7 @@ export async function checkExternalPlagiarism(
     const lang = resolveLanguage(language);
     // Build request payload in new format
     const payload = {
+      max_results: maxResults,
       main_student: {
         id: currentSubmission.studentId || "current_check",
         code: currentSubmission.code,
@@ -68,6 +70,10 @@ export async function checkExternalPlagiarism(
       `[External API] Tools run: ${response.data.comparisons?.length || 0}`,
     );
     console.log("External API Response:", response.data);
+    console.log(
+      "Stringified External API Response:",
+      JSON.stringify(response.data),
+    );
     return response.data;
   } catch (error) {
     console.error("[External API Error]", error.message);
