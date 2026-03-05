@@ -389,6 +389,36 @@ export async function getSubmission(submissionId) {
   }
 }
 
+/**
+ * Get the stored embedding vector for a submission (avoids re-calling OpenAI)
+ * @param {string} submissionId - Submission ID
+ * @returns {Array<number>|null} Embedding vector or null if not found
+ */
+export async function getSubmissionEmbedding(submissionId) {
+  try {
+    if (!index) {
+      throw new Error(
+        "Pinecone index not initialized. Please configure PINECONE_API_KEY in .env file.",
+      );
+    }
+
+    const fetchResponse = await index.fetch([`sub_${submissionId}`]);
+
+    if (
+      !fetchResponse.records ||
+      Object.keys(fetchResponse.records).length === 0
+    ) {
+      return null;
+    }
+
+    const record = fetchResponse.records[`sub_${submissionId}`];
+    return record.values || null;
+  } catch (error) {
+    console.error("[Pinecone Fetch Embedding Error]", error.message);
+    return null;
+  }
+}
+
 export default {
   initializeIndex,
   saveSubmission,
@@ -396,4 +426,5 @@ export default {
   findSimilarChunks,
   getSubmissionsByQuestion,
   getSubmission,
+  getSubmissionEmbedding,
 };

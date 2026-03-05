@@ -353,6 +353,7 @@ app.post("/api/check", async (req, res) => {
       useNormalization = true,
       excludeStudentId = null, // Exclude this student's submissions before calculating plag %
       languageFilter = null, // Filter to only this language before calculating plag %
+      submissionId = null, // If provided, reuse stored embedding instead of calling OpenAI
     } = req.body;
     const normalizedQuestionId = questionId?.trim?.();
     const normalizedExamId =
@@ -465,16 +466,28 @@ app.post("/api/check", async (req, res) => {
       });
     }
 
-    // Step 1: Generate embedding for the submitted code (with custom API key if provided)
-    const codeEmbedding = await embeddings.generateCodeEmbedding(
-      code,
-      language,
-      customApiKey,
-      useNormalization,
-    );
-    console.log(
-      `[Check] Generated embedding for submission (normalization: ${useNormalization ? "ON" : "OFF"})`,
-    );
+    // Step 1: Get embedding — reuse from DB if submissionId provided, otherwise generate via OpenAI
+    let codeEmbedding = null;
+    if (submissionId) {
+      codeEmbedding = await vectorDb.getSubmissionEmbedding(submissionId);
+      if (codeEmbedding) {
+        console.log(
+          `[Check] Reused stored embedding for submission ${submissionId} (skipped OpenAI call)`,
+        );
+      }
+    }
+
+    if (!codeEmbedding) {
+      codeEmbedding = await embeddings.generateCodeEmbedding(
+        code,
+        language,
+        customApiKey,
+        useNormalization,
+      );
+      console.log(
+        `[Check] Generated new embedding via OpenAI (normalization: ${useNormalization ? "ON" : "OFF"})`,
+      );
+    }
 
     // Step 2: Find similar whole submissions
     // Use LOWER threshold (0.3) to catch more matches, let scoring engine filter later
